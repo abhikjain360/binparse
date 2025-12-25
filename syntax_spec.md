@@ -410,7 +410,7 @@ struct CString {
 struct Container {
     len: u16,
     // R2.7: @opaque (skips 'len' bytes, does not validate Inner contents)
-    inner: @opaque InnerPacket[len],
+    inner: @opaque [InnerPacket; len],
 }
 ```
 

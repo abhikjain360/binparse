@@ -1,0 +1,12 @@
+[package]
+name = "binparse-dsl-parse"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+binparse-dsl = { path = "../binparse-dsl" }
+ariadne = "0.6.0"
+winnow = "0.7.14"
+
+[lib]
+path = "src/lib.rs"

@@ -2,4 +2,5 @@
 resolver = "3"
 members = [
     "binparse-dsl",
+    "binparse-dsl-parse",
 ]
