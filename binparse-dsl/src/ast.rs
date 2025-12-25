@@ -1,3 +1,5 @@
+use std::borrow::Cow;
+
 #[derive(Debug, Clone, PartialEq)]
 pub enum Primitive {
     U8,
@@ -5,11 +7,6 @@ pub enum Primitive {
     U32,
     U64,
     U128,
-    I8,
-    I16,
-    I32,
-    I64,
-    I128,
     BitField(u8), // b<N>
 }
 
@@ -34,93 +31,94 @@ pub enum BinaryOp {
 }
 
 #[derive(Debug, Clone, PartialEq)]
-pub enum Literal {
-    Int(i128),
-    Bool(bool),
+pub enum Literal<'a> {
+    Int(u128),
+    Binary { val: u128, width: u8 },
+    String(Cow<'a, str>),
 }
 
 #[derive(Debug, Clone, PartialEq)]
-pub enum Expr {
-    Literal(Literal),
-    Ident(String),
-    Binary(Box<Expr>, BinaryOp, Box<Expr>),
-    Member(Box<Expr>, String), // access field members (e.g. inner.len)
-    Call(String, Vec<Expr>), // For functions or macros
-    Tuple(Vec<Expr>), // For tuple matching in unions
+pub enum Expr<'a> {
+    Literal(Literal<'a>),
+    Ident(Cow<'a, str>),
+    Binary(Box<Expr<'a>>, BinaryOp, Box<Expr<'a>>),
+    Member(Box<Expr<'a>>, Cow<'a, str>), // access field members (e.g. inner.len)
+    Call(Cow<'a, str>, Vec<Expr<'a>>), // For functions or macros
+    Tuple(Vec<Expr<'a>>), // For tuple matching in unions
 }
 
 #[derive(Debug, Clone, PartialEq)]
-pub struct Attribute {
-    pub name: String,
-    pub args: Vec<Expr>,
+pub struct Attribute<'a> {
+    pub name: Cow<'a, str>,
+    pub args: Vec<Expr<'a>>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
-pub struct Field {
-    pub name: Option<String>,
-    pub ty: Type,
-    pub attributes: Vec<Attribute>,
-    pub value_constraint: Option<Expr>, // field = 0x10
+pub struct Field<'a> {
+    pub name: Option<Cow<'a, str>>,
+    pub ty: Type<'a>,
+    pub attributes: Vec<Attribute<'a>>,
+    pub value_constraint: Option<Expr<'a>>, // field = 0x10
 }
 
 #[derive(Debug, Clone, PartialEq)]
-pub struct Conditional {
-    pub condition: Expr,
-    pub then_branch: Vec<StructItem>,
-    pub else_branch: Option<Vec<StructItem>>,
+pub struct Conditional<'a> {
+    pub condition: Expr<'a>,
+    pub then_branch: Vec<StructItem<'a>>,
+    pub else_branch: Option<Vec<StructItem<'a>>>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
-pub enum StructItem {
-    Field(Field),
-    Conditional(Conditional),
+pub enum StructItem<'a> {
+    Field(Field<'a>),
+    Conditional(Conditional<'a>),
 }
 
 #[derive(Debug, Clone, PartialEq)]
-pub struct UnionVariant {
-    pub matchers: Vec<Expr>, // 0 | 8 => ...
-    pub body: UnionBody,     // The struct definition or reference
+pub struct UnionVariant<'a> {
+    pub matchers: Vec<Expr<'a>>, // 0 | 8 => ...
+    pub body: UnionBody<'a>,     // The struct definition or reference
 }
 
 #[derive(Debug, Clone, PartialEq)]
-pub enum UnionBody {
-    InlineStruct(Vec<StructItem>), // { id: u16, ... }
-    TypeRef(String), // KnownStruct
-    // NamedInline? Spec: "Echo { ... }". 
+pub enum UnionBody<'a> {
+    // Spec: "Echo { ... }".
     // This is effectively defining a struct inline.
-    NamedInline(String, Vec<StructItem>),
+    NamedInline(Cow<'a, str>, Vec<StructItem<'a>>),
+    // Error variant: @error(ERROR_NAME { field: expr, ... })
+    Error(Cow<'a, str>, Vec<(Cow<'a, str>, Expr<'a>)>),
 }
 
 #[derive(Debug, Clone, PartialEq)]
-pub struct UnionDef {
-    pub args: Vec<String>, // union(arg1, arg2)
-    pub variants: Vec<UnionVariant>,
+pub struct UnionDef<'a> {
+    pub args: Vec<Cow<'a, str>>, // union(arg1, arg2)
+    pub variants: Vec<UnionVariant<'a>>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
-pub enum Type {
+pub enum Type<'a> {
     Primitive(Primitive),
-    Array(Box<Type>, Expr), // [Type; LengthExpr]
-    StructRef(String),      // Reference to another struct
-    Concat(Vec<Field>),     // concat(f1: type, ...)
-    Union(UnionDef),        // union(...) { ... }
+    Array(Box<Type<'a>>, Option<Expr<'a>>), // [Type; LengthExpr] or [Type]
+    StructRef(Cow<'a, str>),               // Reference to another struct
+    Concat(Vec<Field<'a>>),              // concat(f1: type, ...)
+    Union(UnionDef<'a>),                 // union(...) { ... }
 }
 
 #[derive(Debug, Clone, PartialEq)]
-pub struct StructDef {
-    pub name: String,
-    pub attributes: Vec<Attribute>,
-    pub items: Vec<StructItem>,
+pub struct StructDef<'a> {
+    pub name: Cow<'a, str>,
+    pub attributes: Vec<Attribute<'a>>,
+    pub items: Vec<StructItem<'a>>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
-pub struct ErrorVariant {
-    pub name: String,
-    pub fields: Vec<(String, Primitive)>, // Spec says primitive fields only for errors
+pub struct ErrorVariant<'a> {
+    pub name: Cow<'a, str>,
+    pub fields: Vec<(Cow<'a, str>, Primitive)>, // Spec says primitive fields only for errors
 }
 
 #[derive(Debug, Clone, PartialEq)]
-pub enum Definition {
-    Struct(StructDef),
-    Error(Vec<ErrorVariant>),
+pub enum Definition<'a> {
+    Struct(StructDef<'a>),
+    Error(Vec<ErrorVariant<'a>>),
 }
