@@ -41,8 +41,8 @@ pub enum Expr<'a> {
     Ident(&'a str),
     Binary(Box<Expr<'a>>, BinaryOp, Box<Expr<'a>>),
     Member(Box<Expr<'a>>, &'a str), // access field members (e.g. inner.len)
-    Call(&'a str, Vec<Expr<'a>>),   // For functions or macros
-    Tuple(Vec<Expr<'a>>),           // For tuple matching in unions
+    Call(&'a str, Vec<Expr<'a>>),   // macros
+    Tuple(Vec<Expr<'a>>),           // tuple matching in unions
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -75,15 +75,15 @@ pub enum StructItem<'a> {
 #[derive(Debug, Clone, PartialEq)]
 pub struct UnionVariant<'a> {
     pub matchers: Vec<Expr<'a>>, // 0 | 8 => ...
-    pub body: UnionBody<'a>,     // The struct definition or reference
+    pub body: UnionBody<'a>,     // struct definition or reference
 }
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum UnionBody<'a> {
-    // Spec: "Echo { ... }".
-    // This is effectively defining a struct inline.
+    // spec: "Echo { ... }".
+    // effectively defining a struct inline
     NamedInline(&'a str, Vec<StructItem<'a>>),
-    // Error variant: @error(ERROR_NAME { field: expr, ... })
+    // error variant: @error(ERROR_NAME { field: expr, ... })
     Error(&'a str, Vec<(&'a str, Expr<'a>)>),
 }
 
