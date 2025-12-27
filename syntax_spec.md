@@ -705,11 +705,12 @@ Refer to `instructions.md` for R5 requirements. The implementation ensures zero-
 ### 6.1 Custom Hooks (R6.1)
 
 **DSL Syntax:**
+
 ```binparse
 struct SecureData {
     // R6.1: Custom transformation (Decryption)
-    iv: @transform(fn("crate::aes_decrypt")) [u8; 16],
-    
+    iv: @transform(fn("crate::aes_decrypt"), usize) [u8; 16],
+
     // R2.3: VarInt via custom parser
     @parse_with(fn("crate::varint::parse"), u64)
     length: @greedy(unsafe_eof) [u8],

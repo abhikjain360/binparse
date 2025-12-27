@@ -1,4 +1,4 @@
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, Copy, PartialEq)]
 pub enum Primitive {
     U8,
     U16,
@@ -8,7 +8,7 @@ pub enum Primitive {
     BitField(u8), // b<N>
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, Copy, PartialEq)]
 pub enum BinaryOp {
     Add,
     Sub,
@@ -28,21 +28,33 @@ pub enum BinaryOp {
     BitXor,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct IntLiteral {
+    pub value: u128,
+    pub width: u8,
+    pub ty: IntType,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum IntType {
+    Decimal,
+    Hex,
+    Binary,
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub enum Literal<'a> {
-    Int(u128),
-    Binary(u8),
+    Int(IntLiteral),
     String(&'a str),
 }
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum Expr<'a> {
     Literal(Literal<'a>),
-    Ident(&'a str),
+    Path(Vec<&'a str>),
     Binary(Box<BinaryExpr<'a>>),
-    Member(Box<Expr<'a>>, &'a str), // access field members (e.g. inner.len)
-    Call(&'a str, Vec<Expr<'a>>),   // macros
-    Tuple(Vec<Expr<'a>>),           // tuple matching in unions
+    Call(&'a str, Vec<Expr<'a>>), // macros
+    Tuple(Vec<Expr<'a>>),         // tuple matching in unions
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -61,9 +73,14 @@ pub struct Attribute<'a> {
 #[derive(Debug, Clone, PartialEq)]
 pub struct Field<'a> {
     pub name: &'a str,
-    pub ty: Type<'a>,
     pub attributes: Vec<Attribute<'a>>,
-    pub value_constraint: Option<Expr<'a>>, // field = 0x10
+    pub value: FieldValue<'a>,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub enum FieldValue<'a> {
+    Type(Type<'a>),
+    Constraint(Expr<'a>), // field = 0x10
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -95,18 +112,31 @@ pub enum UnionBody<'a> {
 }
 
 #[derive(Debug, Clone, PartialEq)]
-pub struct UnionDef<'a> {
+pub struct Union<'a> {
     pub args: Vec<&'a str>, // union(arg1, arg2)
     pub variants: Vec<UnionVariant<'a>>,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct BitMatchType {
+    pub width: u8,
+    pub value: u128,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct ArrayType<'a> {
+    pub elem_ty: Type<'a>,
+    pub size_expr: Option<Expr<'a>>,
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub enum Type<'a> {
+    BitMatch(BitMatchType),
     Primitive(Primitive),
-    Array(Box<Type<'a>>, Option<Expr<'a>>), // [Type; LengthExpr] or [Type]
-    StructRef(&'a str),                     // Reference to another struct
-    Concat(Vec<Field<'a>>),                 // concat(f1: type, ...)
-    Union(UnionDef<'a>),                    // union(...) { ... }
+    Array(Box<ArrayType<'a>>),
+    StructRef(Vec<&'a str>), // Reference to another struct
+    Concat(Vec<Field<'a>>),  // concat(f1: type, ...)
+    Union(Union<'a>),        // union(...) { ... }
 }
 
 #[derive(Debug, Clone, PartialEq)]

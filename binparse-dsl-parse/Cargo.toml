@@ -7,6 +7,10 @@ edition = "2024"
 binparse-dsl = { path = "../binparse-dsl" }
 ariadne = "0.6.0"
 winnow = { version = "0.7.14", features = ["simd"] }
+thiserror = "2.0.17"
 
 [lib]
 path = "src/lib.rs"
+
+[features]
+debug = ["winnow/debug"]

@@ -1,7 +1,9 @@
 use winnow::{
     Parser,
     ascii::{digit1, hex_digit1, multispace0},
-    combinator::{alt, delimited, dispatch, fail, opt, peek, preceded, repeat, separated, seq},
+    combinator::{
+        alt, delimited, dispatch, fail, opt, peek, preceded, repeat, separated, seq, terminated,
+    },
     token::{any, take_until, take_while},
 };
 
@@ -72,6 +74,10 @@ fn identifier<'a>(input: &mut &'a str) -> winnow::Result<&'a str> {
     }
 }
 
+fn path<'a>(input: &mut &'a str) -> winnow::Result<Vec<&'a str>> {
+    separated(1.., identifier, ".").parse_next(input)
+}
+
 // --- Literals ---
 
 fn literal<'a>(input: &mut &'a str) -> winnow::Result<ast::Literal<'a>> {
@@ -86,23 +92,60 @@ fn literal<'a>(input: &mut &'a str) -> winnow::Result<ast::Literal<'a>> {
     .parse_next(input)
 }
 
+#[derive(Debug, thiserror::Error)]
+pub enum IntLiteralError {
+    #[error("width too large: {0}")]
+    WidthTooLarge(#[from] std::num::TryFromIntError),
+    #[error("invalid integer: {0}")]
+    InvalidInt(#[from] std::num::ParseIntError),
+}
+
 fn decimal_literal<'a>(input: &mut &'a str) -> winnow::Result<ast::Literal<'a>> {
     digit1
-        .try_map(|s: &str| s.parse::<u128>())
+        .try_map(|s: &str| {
+            let width = s.len().try_into()?;
+
+            s.parse::<u128>()
+                .map(|v| ast::IntLiteral {
+                    value: v,
+                    width,
+                    ty: ast::IntType::Decimal,
+                })
+                .map_err(IntLiteralError::InvalidInt)
+        })
         .map(ast::Literal::Int)
         .parse_next(input)
 }
 
 fn hex_literal<'a>(input: &mut &'a str) -> winnow::Result<ast::Literal<'a>> {
     preceded("x", hex_digit1)
-        .try_map(|s: &str| u128::from_str_radix(s, 16))
+        .try_map(|s: &str| {
+            let width = s.len().try_into()?;
+            u128::from_str_radix(s, 16)
+                .map(|v| ast::IntLiteral {
+                    value: v,
+                    width,
+                    ty: ast::IntType::Hex,
+                })
+                .map_err(IntLiteralError::InvalidInt)
+        })
         .map(ast::Literal::Int)
         .parse_next(input)
 }
 
 fn binary_literal<'a>(input: &mut &'a str) -> winnow::Result<ast::Literal<'a>> {
     preceded("b", take_while(1.., |c| c == '0' || c == '1'))
-        .try_map(|s: &str| u8::from_str_radix(s, 2).map(ast::Literal::Binary))
+        .try_map(|s: &str| {
+            let width = s.len().try_into()?;
+            u128::from_str_radix(s, 2)
+                .map(|v| ast::IntLiteral {
+                    value: v,
+                    width,
+                    ty: ast::IntType::Binary,
+                })
+                .map_err(IntLiteralError::InvalidInt)
+        })
+        .map(ast::Literal::Int)
         .parse_next(input)
 }
 
@@ -125,18 +168,23 @@ fn args<'a>(input: &mut &'a str) -> winnow::Result<Vec<ast::Expr<'a>>> {
 fn atom<'a>(input: &mut &'a str) -> winnow::Result<ast::Expr<'a>> {
     padded(alt((
         literal.map(ast::Expr::Literal),
-        call_or_ident,
+        call_or_path,
         tuple_or_group,
     )))
     .parse_next(input)
 }
 
-fn call_or_ident<'a>(input: &mut &'a str) -> winnow::Result<ast::Expr<'a>> {
-    let name = identifier(input)?;
-    let args_opt = opt(args).parse_next(input)?;
-    match args_opt {
-        Some(a) => Ok(ast::Expr::Call(name, a)),
-        None => Ok(ast::Expr::Ident(name)),
+fn call_or_path<'a>(input: &mut &'a str) -> winnow::Result<ast::Expr<'a>> {
+    let p = path(input)?;
+    if p.len() == 1 {
+        let name = p[0];
+        let args_opt = opt(args).parse_next(input)?;
+        match args_opt {
+            Some(a) => Ok(ast::Expr::Call(name, a)),
+            None => Ok(ast::Expr::Path(p)),
+        }
+    } else {
+        Ok(ast::Expr::Path(p))
     }
 }
 
@@ -153,12 +201,8 @@ fn tuple_or_group<'a>(input: &mut &'a str) -> winnow::Result<ast::Expr<'a>> {
 }
 
 fn member_access<'a>(input: &mut &'a str) -> winnow::Result<ast::Expr<'a>> {
-    let mut lhs = atom(input)?;
-    while padded('.').parse_next(input).is_ok() {
-        let field = padded(identifier).parse_next(input)?;
-        lhs = ast::Expr::Member(Box::new(lhs), field);
-    }
-    Ok(lhs)
+    // member access is now folded into atom via path
+    atom(input)
 }
 
 fn product<'a>(input: &mut &'a str) -> winnow::Result<ast::Expr<'a>> {
@@ -309,7 +353,7 @@ fn logic_or<'a>(input: &mut &'a str) -> winnow::Result<ast::Expr<'a>> {
 
 fn attribute<'a>(input: &mut &'a str) -> winnow::Result<ast::Attribute<'a>> {
     seq! {ast::Attribute {
-        _: padded('@'),
+        _: '@',
         name: identifier,
         args: opt(args).map(|o| o.unwrap_or_default()),
     }}
@@ -343,7 +387,7 @@ fn type_parser<'a>(input: &mut &'a str) -> winnow::Result<ast::Type<'a>> {
         concat_type,
         union_type,
         primitive.map(ast::Type::Primitive),
-        padded(identifier).map(ast::Type::StructRef),
+        padded(path).map(ast::Type::StructRef),
     ))
     .parse_next(input)
 }
@@ -354,31 +398,22 @@ fn array_type<'a>(input: &mut &'a str) -> winnow::Result<ast::Type<'a>> {
         (type_parser, opt(preceded(padded(';'), expr))),
         padded(']'),
     )
-    .map(|(t, len)| ast::Type::Array(Box::new(t), len))
+    .map(|(elem_ty, size_expr)| ast::Type::Array(Box::new(ast::ArrayType { elem_ty, size_expr })))
     .parse_next(input)
 }
 
-fn concat_field<'a>(input: &mut &'a str) -> winnow::Result<ast::Field<'a>> {
-    let (attrs, name) = (attributes, padded(identifier)).parse_next(input)?;
-    let _ = padded(':').parse_next(input)?;
-    let ty = type_parser(input)?;
-    let constraint = opt(preceded(padded('='), expr)).parse_next(input)?;
-    Ok(ast::Field {
-        name,
-        ty,
-        attributes: attrs,
-        value_constraint: constraint,
-    })
+fn field_value<'a>(input: &mut &'a str) -> winnow::Result<ast::FieldValue<'a>> {
+    alt((
+        preceded(padded(':'), type_parser).map(ast::FieldValue::Type),
+        preceded(padded('='), expr).map(ast::FieldValue::Constraint),
+    ))
+    .parse_next(input)
 }
 
 fn concat_type<'a>(input: &mut &'a str) -> winnow::Result<ast::Type<'a>> {
     preceded(
         padded("concat"),
-        delimited(
-            padded('('),
-            separated(0.., concat_field, padded(',')),
-            padded(')'),
-        ),
+        delimited(padded('('), separated(0.., field, padded(',')), padded(')')),
     )
     .map(ast::Type::Concat)
     .parse_next(input)
@@ -433,7 +468,7 @@ fn union_type<'a>(input: &mut &'a str) -> winnow::Result<ast::Type<'a>> {
             delimited(padded('{'), union_variants, padded('}'))
         },
     )
-    .map(|(args, variants)| ast::Type::Union(ast::UnionDef { args, variants }))
+    .map(|(args, variants)| ast::Type::Union(ast::Union { args, variants }))
     .parse_next(input)
 }
 
@@ -459,7 +494,7 @@ fn union_variants<'a>(input: &mut &'a str) -> winnow::Result<Vec<ast::UnionVaria
 fn struct_item<'a>(input: &mut &'a str) -> winnow::Result<ast::StructItem<'a>> {
     alt((
         conditional.map(ast::StructItem::Conditional),
-        field_decl.map(ast::StructItem::Field),
+        field_with_opt_comma.map(ast::StructItem::Field),
     ))
     .parse_next(input)
 }
@@ -477,51 +512,81 @@ fn conditional<'a>(input: &mut &'a str) -> winnow::Result<ast::Conditional<'a>> 
     }}.parse_next(input)
 }
 
-fn field_decl<'a>(input: &mut &'a str) -> winnow::Result<ast::Field<'a>> {
-    let field_attrs = attributes(input)?;
-    let name = padded(identifier).parse_next(input)?;
-    let type_info = opt(preceded(padded(':'), (attributes, type_parser))).parse_next(input)?;
-    let constraint = opt(preceded(padded('='), expr)).parse_next(input)?;
-    let _ = opt(padded(',')).parse_next(input)?;
+fn field<'a>(input: &mut &'a str) -> winnow::Result<ast::Field<'a>> {
+    seq! {ast::Field {
+        attributes: attributes,
+        name: padded(identifier),
+        value: field_value,
+    }}
+    .parse_next(input)
+}
 
-    let (type_attrs, mut ty) = match type_info {
-        Some((a, t)) => (a, Some(t)),
-        None => (Vec::new(), None),
-    };
-    let mut final_attrs = field_attrs;
-    final_attrs.extend(type_attrs);
+fn field_with_opt_comma<'a>(input: &mut &'a str) -> winnow::Result<ast::Field<'a>> {
+    terminated(field, opt(padded(','))).parse_next(input)
 
-    if ty.is_none()
-        && let Some(ast::Expr::Literal(lit)) = &constraint
-    {
-        match lit {
-            ast::Literal::Binary(width) => {
-                ty = Some(ast::Type::Primitive(ast::Primitive::BitField(*width)));
-            }
-            ast::Literal::Int(val) => {
-                let t = if *val <= u8::MAX as u128 {
-                    ast::Primitive::U8
-                } else if *val <= u16::MAX as u128 {
-                    ast::Primitive::U16
-                } else if *val <= u32::MAX as u128 {
-                    ast::Primitive::U32
-                } else if *val <= u64::MAX as u128 {
-                    ast::Primitive::U64
-                } else {
-                    ast::Primitive::U128
-                };
-                ty = Some(ast::Type::Primitive(t));
-            }
-            _ => {}
-        }
-    }
-    let final_ty = ty.unwrap_or(ast::Type::Primitive(ast::Primitive::U8));
-    Ok(ast::Field {
-        name,
-        ty: final_ty,
-        attributes: final_attrs,
-        value_constraint: constraint,
-    })
+    // let type_info = opt(preceded(padded(':'), (attributes, type_parser))).parse_next(input)?;
+    // let constraint = opt(preceded(padded('='), expr)).parse_next(input)?;
+    // let _ = opt(padded(',')).parse_next(input)?;
+
+    // let (type_attrs, mut ty) = match type_info {
+    //     Some((a, t)) => (a, Some(t)),
+    //     None => (Vec::new(), None),
+    // };
+    // let mut final_attrs = field_attrs;
+    // final_attrs.extend(type_attrs);
+
+    // if ty.is_none()
+    //     && let Some(ast::Expr::Literal(lit)) = &constraint
+    // {
+    //     match lit {
+    //         ast::Literal::Int(ast::IntLiteral {
+    //             width,
+    //             ty: ast::IntType::Binary,
+    //             value,
+    //         }) => {
+    //             ty = Some(ast::Type::BitMatch(ast::BitMatchType {
+    //                 width: *width as u8,
+    //                 value: *value,
+    //             }));
+    //         }
+    //         ast::Literal::Int(ast::IntLiteral {
+    //             width,
+    //             ty: ast::IntType::Hex,
+    //             value,
+    //         }) => {
+    //             ty = Some(ast::Type::BitMatch(ast::BitMatchType {
+    //                 width: *width as u8 * 4,
+    //                 value: *value,
+    //             }));
+    //         }
+    //         ast::Literal::Int(ast::IntLiteral {
+    //             value,
+    //             ty: ast::IntType::Decimal,
+    //             ..
+    //         }) => {
+    //             let t = if *value <= u8::MAX as u128 {
+    //                 ast::Primitive::U8
+    //             } else if *value <= u16::MAX as u128 {
+    //                 ast::Primitive::U16
+    //             } else if *value <= u32::MAX as u128 {
+    //                 ast::Primitive::U32
+    //             } else if *value <= u64::MAX as u128 {
+    //                 ast::Primitive::U64
+    //             } else {
+    //                 ast::Primitive::U128
+    //             };
+    //             ty = Some(ast::Type::Primitive(t));
+    //         }
+    //         _ => {}
+    //     }
+    // }
+    // let final_ty = ty.unwrap_or(ast::Type::Primitive(ast::Primitive::U8));
+    // Ok(ast::Field {
+    //     name,
+    //     ty: final_ty,
+    //     attributes: final_attrs,
+    //     value_constraint: constraint,
+    // })
 }
 
 fn struct_def<'a>(input: &mut &'a str) -> winnow::Result<ast::Definition<'a>> {
@@ -601,16 +666,6 @@ mod tests {
         let src = r#"
             struct Attr {
                 @attr1 field: u8,
-            }
-        "#;
-        parse_helper(src);
-    }
-
-    #[test]
-    fn test_attributes_post() {
-        let src = r#"
-            struct AttrPost {
-                field: @attr2 u8,
             }
         "#;
         parse_helper(src);
@@ -708,7 +763,16 @@ mod tests {
         match &defs[0] {
             ast::Definition::Struct(s) => match &s.items[0] {
                 ast::StructItem::Field(f) => {
-                    assert_eq!(f.ty, ast::Type::Primitive(ast::Primitive::BitField(3)));
+                    assert_eq!(
+                        f.value,
+                        ast::FieldValue::Constraint(ast::Expr::Literal(ast::Literal::Int(
+                            ast::IntLiteral {
+                                value: 3,
+                                width: 3,
+                                ty: ast::IntType::Binary
+                            }
+                        )))
+                    );
                 }
                 _ => panic!("Expected field"),
             },
@@ -729,7 +793,16 @@ mod tests {
                 match &s.items[0] {
                     ast::StructItem::Field(f) => {
                         // 0 fits in u8
-                        assert_eq!(f.ty, ast::Type::Primitive(ast::Primitive::U8));
+                        assert_eq!(
+                            f.value,
+                            ast::FieldValue::Constraint(ast::Expr::Literal(ast::Literal::Int(
+                                ast::IntLiteral {
+                                    value: 0,
+                                    width: 1,
+                                    ty: ast::IntType::Decimal
+                                }
+                            )))
+                        );
                     }
                     _ => panic!("Expected field"),
                 }
@@ -769,14 +842,32 @@ mod tests {
                 // v = 10 -> u8
                 match &s.items[0] {
                     ast::StructItem::Field(f) => {
-                        assert_eq!(f.ty, ast::Type::Primitive(ast::Primitive::U8))
+                        assert_eq!(
+                            f.value,
+                            ast::FieldValue::Constraint(ast::Expr::Literal(ast::Literal::Int(
+                                ast::IntLiteral {
+                                    value: 10,
+                                    width: 2,
+                                    ty: ast::IntType::Decimal
+                                }
+                            )))
+                        );
                     }
                     _ => panic!("Expected field v"),
                 }
                 // big = 65536 -> u32 (since > u16::MAX 65535)
                 match &s.items[1] {
                     ast::StructItem::Field(f) => {
-                        assert_eq!(f.ty, ast::Type::Primitive(ast::Primitive::U32))
+                        assert_eq!(
+                            f.value,
+                            ast::FieldValue::Constraint(ast::Expr::Literal(ast::Literal::Int(
+                                ast::IntLiteral {
+                                    value: 65536,
+                                    width: 5,
+                                    ty: ast::IntType::Decimal
+                                }
+                            )))
+                        );
                     }
                     _ => panic!("Expected field big"),
                 }
@@ -832,7 +923,11 @@ mod tests {
             ast::Definition::Struct(s) => {
                 assert_eq!(s.attributes.len(), 2);
                 assert_eq!(s.attributes[0].name, "len");
+                assert_eq!(s.attributes[0].args.len(), 1);
+                assert_eq!(s.attributes[0].args[0], ast::Expr::Path(vec!["total_len"]));
                 assert_eq!(s.attributes[1].name, "endian");
+                assert_eq!(s.attributes[1].args.len(), 1);
+                assert_eq!(s.attributes[1].args[0], ast::Expr::Path(vec!["big"]));
             }
             _ => panic!("Expected struct"),
         }
@@ -874,6 +969,8 @@ mod tests {
                 ast::StructItem::Field(f) => {
                     assert_eq!(f.attributes.len(), 1);
                     assert_eq!(f.attributes[0].name, "len");
+                    assert_eq!(f.attributes[0].args.len(), 1);
+                    assert_eq!(f.attributes[0].args[0], ast::Expr::Path(vec!["len"]));
                 }
                 _ => panic!("Expected field"),
             },
@@ -897,6 +994,8 @@ mod tests {
                 ast::StructItem::Field(f) => {
                     assert_eq!(f.attributes.len(), 1);
                     assert_eq!(f.attributes[0].name, "greedy");
+                    assert_eq!(f.attributes[0].args.len(), 1);
+                    assert_eq!(f.attributes[0].args[0], ast::Expr::Path(vec!["unsafe_eof"]));
                 }
                 _ => panic!("Expected field"),
             },
@@ -906,23 +1005,27 @@ mod tests {
 
     #[test]
     fn test_until_attribute() {
-        // let src = r#"
-        // struct CString {
-        //         @until(0x00) content: [u8],
-        //     }
-        // "#;
-
         let src = r#"
         struct CString {
-        len: u16
+                @until(x00) content: [u8],
             }
         "#;
+
         let defs = parse_helper(src);
         println!("{:?}", defs);
         match &defs[0] {
             ast::Definition::Struct(s) => match &s.items[0] {
                 ast::StructItem::Field(f) => {
                     assert_eq!(f.attributes[0].name, "until");
+                    assert_eq!(f.attributes[0].args.len(), 1);
+                    assert_eq!(
+                        f.attributes[0].args[0],
+                        ast::Expr::Literal(ast::Literal::Int(ast::IntLiteral {
+                            value: 0,
+                            width: 2,
+                            ty: ast::IntType::Hex
+                        }))
+                    );
                 }
                 _ => panic!("Expected field"),
             },
@@ -944,8 +1047,8 @@ mod tests {
         let defs = parse_helper(src);
         match &defs[0] {
             ast::Definition::Struct(s) => match &s.items[0] {
-                ast::StructItem::Field(f) => match &f.ty {
-                    ast::Type::Concat(fields) => {
+                ast::StructItem::Field(f) => match &f.value {
+                    ast::FieldValue::Type(ast::Type::Concat(fields)) => {
                         assert_eq!(fields.len(), 3);
                         assert_eq!(fields[1].attributes[0].name, "skip");
                     }
@@ -1014,7 +1117,7 @@ mod tests {
             @endian(big)
             struct EndianExample {
                 val_be: u32,
-                val_le: @endian(little) u32,
+                @endian(little) val_le: u32,
                 @bit_order(lsb) lsb_flags: b<8>,
             }
         "#;
@@ -1025,6 +1128,17 @@ mod tests {
                 match &s.items[1] {
                     ast::StructItem::Field(f) => {
                         assert_eq!(f.attributes[0].name, "endian");
+                        assert_eq!(f.attributes[0].args.len(), 1);
+                        assert_eq!(f.attributes[0].args[0], ast::Expr::Path(vec!["little"]));
+                    }
+                    _ => panic!("Expected field"),
+                }
+
+                match &s.items[2] {
+                    ast::StructItem::Field(f) => {
+                        assert_eq!(f.attributes[0].name, "bit_order");
+                        assert_eq!(f.attributes[0].args.len(), 1);
+                        assert_eq!(f.attributes[0].args[0], ast::Expr::Path(vec!["lsb"]));
                     }
                     _ => panic!("Expected field"),
                 }
@@ -1073,8 +1187,8 @@ mod tests {
             ast::Definition::Struct(s) => {
                 match &s.items[1] {
                     ast::StructItem::Field(f) => {
-                        match &f.ty {
-                            ast::Type::Union(u) => {
+                        match &f.value {
+                            ast::FieldValue::Type(ast::Type::Union(u)) => {
                                 // The wildcard '_' is parsed as an identifier
                                 assert_eq!(u.variants.len(), 2);
                             }
@@ -1104,8 +1218,8 @@ mod tests {
             ast::Definition::Struct(s) => {
                 match &s.items[1] {
                     ast::StructItem::Field(f) => {
-                        match &f.ty {
-                            ast::Type::Union(u) => {
+                        match &f.value {
+                            ast::FieldValue::Type(ast::Type::Union(u)) => {
                                 assert_eq!(u.variants.len(), 2);
                                 // Check the error variant
                                 match &u.variants[1].body {
@@ -1197,6 +1311,30 @@ mod tests {
                     _ => panic!("Expected field"),
                 }
             }
+            _ => panic!("Expected struct"),
+        }
+    }
+
+    #[test]
+    fn test_path_parsing() {
+        let src = r#"
+            struct PathExample {
+                @path(inner.flags) flags: b<3>,
+            }
+        "#;
+        let defs = parse_helper(src);
+        match &defs[0] {
+            ast::Definition::Struct(s) => match &s.items[0] {
+                ast::StructItem::Field(f) => {
+                    assert_eq!(f.attributes[0].name, "path");
+                    assert_eq!(f.attributes[0].args.len(), 1);
+                    assert_eq!(
+                        f.attributes[0].args[0],
+                        ast::Expr::Path(vec!["inner", "flags"])
+                    );
+                }
+                _ => panic!("Expected field"),
+            },
             _ => panic!("Expected struct"),
         }
     }
