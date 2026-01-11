@@ -11,17 +11,17 @@ use binparse_dsl as ast;
 
 // --- Whitespace & Comments ---
 
-fn line_comment<'a>(input: &mut &'a str) -> winnow::Result<()> {
+fn line_comment(input: &mut &str) -> winnow::Result<()> {
     ("//", take_while(0.., |c| c != '\n'), opt('\n'))
         .void()
         .parse_next(input)
 }
 
-fn block_comment<'a>(input: &mut &'a str) -> winnow::Result<()> {
+fn block_comment(input: &mut &str) -> winnow::Result<()> {
     ("/*", take_until(0.., "*/"), "*/").void().parse_next(input)
 }
 
-fn ws<'a>(input: &mut &'a str) -> winnow::Result<()> {
+fn ws(input: &mut &str) -> winnow::Result<()> {
     loop {
         let start_len = input.len();
         multispace0.parse_next(input)?;
@@ -364,7 +364,7 @@ fn attributes<'a>(input: &mut &'a str) -> winnow::Result<Vec<ast::Attribute<'a>>
     repeat(0.., padded(attribute)).parse_next(input)
 }
 
-fn primitive<'a>(input: &mut &'a str) -> winnow::Result<ast::Primitive> {
+fn primitive(input: &mut &str) -> winnow::Result<ast::Primitive> {
     dispatch! {peek(any);
         'u' => alt((
             "u8".map(|_| ast::Primitive::U8),

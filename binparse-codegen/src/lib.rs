@@ -6,6 +6,7 @@ use quote::quote;
 
 use struct_::*;
 
+mod field;
 mod struct_;
 
 pub struct CodeGen<'a> {
