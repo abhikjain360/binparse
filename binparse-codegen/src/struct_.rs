@@ -10,7 +10,13 @@ use crate::field::FieldCtx;
 pub(crate) struct StructCtx<'a> {
     pub(crate) origin: &'a ast::Struct<'a>,
     pub(crate) offset: Option<Len>,
+    done_fields: Vec<DoneField<'a>>,
     pub(crate) done: &'a HashMap<&'a str, GeneratedStruct>,
+}
+
+pub(crate) struct DoneField<'a> {
+    origin: &'a ast::Field<'a>,
+    len: Option<Len>,
 }
 
 pub(crate) struct GeneratedStruct {
@@ -36,6 +42,7 @@ impl<'a> StructCtx<'a> {
         Self {
             origin,
             offset: Some(Len { byte: 0, bit: 0 }),
+            done_fields: vec![],
             done,
         }
     }
@@ -44,10 +51,13 @@ impl<'a> StructCtx<'a> {
         let mut field_definitions = TokenStream::new();
         let mut functions = TokenStream::new();
 
+        let mut parser_impl = TokenStream::new();
+        let mut parser_ret = TokenStream::new();
+
         for item in &self.origin.items {
             if let ast::StructItem::Field(field) = item {
                 let current_offset = self.offset;
-                let field_ctx = FieldCtx::new(field, current_offset);
+                let field_ctx = FieldCtx::new(field, current_offset, &self.done_fields);
                 let generated = field_ctx.generate().map_err(|error| Error::Field {
                     name: field.name.to_string(),
                     error,
@@ -59,7 +69,13 @@ impl<'a> StructCtx<'a> {
 
                 // Update offset for next field
                 self.offset = match (self.offset, generated.len) {
-                    (Some(current), Some(field_len)) => Some(current + field_len),
+                    (Some(current), Some(field_len)) => {
+                        let fn_name = &generated.offset_getter_fn_name;
+                        parser_impl.extend(quote! {
+                            let len = len + me.#fn_name();
+                        });
+                        Some(current + field_len)
+                    }
                     _ => None,
                 };
             }
@@ -74,7 +90,8 @@ impl<'a> StructCtx<'a> {
 
             impl<'a> #name<'a> {
                 pub fn parse(data: &'a [u8]) -> Option<(Self, &'a [u8]) {
-                    todo!("implement the parse function");
+                    #parser_impl
+                    #parser_ret
                 }
 
                 #functions

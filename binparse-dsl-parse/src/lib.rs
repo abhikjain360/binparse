@@ -1,15 +1,11 @@
 use winnow::{
     Parser,
     ascii::{digit1, hex_digit1, multispace0},
-    combinator::{
-        alt, delimited, dispatch, fail, opt, peek, preceded, repeat, separated, seq, terminated,
-    },
+    combinator::*,
     token::{any, take_until, take_while},
 };
 
 use binparse_dsl as ast;
-
-// --- Whitespace & Comments ---
 
 fn line_comment(input: &mut &str) -> winnow::Result<()> {
     ("//", take_while(0.., |c| c != '\n'), opt('\n'))
@@ -50,8 +46,6 @@ where
     }
 }
 
-// --- Identifiers ---
-
 fn ident_raw<'a>(input: &mut &'a str) -> winnow::Result<&'a str> {
     take_while(1.., |c: char| c.is_ascii_alphanumeric() || c == '_')
         .verify(|s: &str| {
@@ -77,8 +71,6 @@ fn identifier<'a>(input: &mut &'a str) -> winnow::Result<&'a str> {
 fn path<'a>(input: &mut &'a str) -> winnow::Result<Vec<&'a str>> {
     separated(1.., identifier, ".").parse_next(input)
 }
-
-// --- Literals ---
 
 fn literal<'a>(input: &mut &'a str) -> winnow::Result<ast::Literal<'a>> {
     dispatch! {peek(any);
@@ -154,8 +146,6 @@ fn string_literal<'a>(input: &mut &'a str) -> winnow::Result<ast::Literal<'a>> {
         .map(|s: &str| ast::Literal::String(s))
         .parse_next(input)
 }
-
-// --- Expressions ---
 
 fn expr<'a>(input: &mut &'a str) -> winnow::Result<ast::Expr<'a>> {
     logic_or(input)

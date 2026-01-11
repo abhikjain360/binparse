@@ -128,21 +128,6 @@ impl<'a> CodeGen<'a> {
         me.print()
     }
 
-    #[expect(dead_code, unused_variables)]
-    fn generate_conditional(&mut self, conditional: &'a ast::Conditional<'a>) -> Result<(), Error> {
-        todo!()
-    }
-
-    fn generate_field(
-        &self,
-        _name: &str,
-        _ty: &'a ast::Type<'a>,
-        _struct_: &'a ast::Struct<'a>,
-        _offset: Option<Len>,
-    ) -> Result<(Option<Len>, TokenStream), Error> {
-        todo!()
-    }
-
     fn print(self) -> Result<String, Error> {
         let combined: TokenStream = self.done.into_values().map(|s| s.tokens).collect();
         let file: syn::File = syn::parse2(combined).expect("failed to parse generated tokens");
@@ -201,23 +186,5 @@ fn find_conditional_dependencies<'a>(
     find_dependencies(&conditional.then_branch, dependencies);
     if let Some(else_branch) = &conditional.else_branch {
         find_dependencies(else_branch, dependencies);
-    }
-}
-
-fn match_primitive(primitive: &ast::Primitive) -> (Len, TokenStream, bool) {
-    match primitive {
-        ast::Primitive::U8 => (Len { byte: 1, bit: 0 }, quote! { u8 }, true),
-        ast::Primitive::U16 => (Len { byte: 2, bit: 0 }, quote! { u16 }, true),
-        ast::Primitive::U32 => (Len { byte: 4, bit: 0 }, quote! { u32 }, true),
-        ast::Primitive::U64 => (Len { byte: 8, bit: 0 }, quote! { u64 }, true),
-        ast::Primitive::U128 => (Len { byte: 16, bit: 0 }, quote! { u128 }, true),
-        ast::Primitive::BitField(width) => (
-            Len {
-                byte: 0,
-                bit: *width as usize % 8,
-            },
-            quote! { u8 },
-            false,
-        ),
     }
 }
