@@ -127,9 +127,9 @@ pub enum Type<'a> {
     BitField(u8), // b<N>
     Primitive(Primitive),
     Array(Box<ArrayType<'a>>),
-    StructRef(Vec<&'a str>), // Reference to another struct
-    Concat(Vec<Field<'a>>),  // concat(f1: type, ...)
-    Union(Union<'a>),        // union(...) { ... }
+    StructRef(&'a str),     // Reference to another struct
+    Concat(Vec<Field<'a>>), // concat(f1: type, ...)
+    Union(Union<'a>),       // union(...) { ... }
 }
 
 #[derive(Debug, Clone, PartialEq)]

@@ -134,8 +134,8 @@ fn find_dependencies<'a>(
 
 fn find_type_dependencies<'a>(ty: &ast::Type<'a>, dependencies: &mut HashSet<&'a str>) {
     match ty {
-        ast::Type::StructRef(path) => {
-            dependencies.insert(path.last().unwrap());
+        ast::Type::StructRef(name) => {
+            dependencies.insert(name);
         }
         ast::Type::Array(array_ty) => {
             find_type_dependencies(&array_ty.elem_ty, dependencies);

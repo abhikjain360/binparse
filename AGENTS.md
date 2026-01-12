@@ -11,3 +11,4 @@
 - as this codebase is complex, do only one step at a time, only do what is asked for and no more and ask for clarifications if doing what is asked for is not enough according to your analysis.
   - in the same spirit prefer using match arms with todo!() for other cases
 - bitfield width is always less than 8
+- don't leave comments, at all, unless asked otherwise

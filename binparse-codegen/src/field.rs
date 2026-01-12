@@ -122,16 +122,16 @@ impl<'a> FieldCtx<'a> {
                         }
 
                         (None, None) => return Err(Error::UnknownOffset),
+
                         _ => todo!(),
                     }
                 }
 
-                ast::Type::StructRef(path) => {
-                    let struct_name = path.join("::");
+                ast::Type::StructRef(struct_name) => {
                     let generated_struct = self
                         .done
-                        .get(struct_name.as_str())
-                        .ok_or_else(|| Error::UnknownType(struct_name.clone()))?;
+                        .get(struct_name)
+                        .ok_or_else(|| Error::UnknownType(struct_name.to_string()))?;
 
                     let len = generated_struct.len;
                     let struct_ident = format_ident!("{}", struct_name);
@@ -150,6 +150,7 @@ impl<'a> FieldCtx<'a> {
                         }
 
                         (None, None) => return Err(Error::UnknownOffset),
+
                         _ => todo!(),
                     }
                 }
