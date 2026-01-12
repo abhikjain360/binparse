@@ -1,8 +1,9 @@
+use binparse::Len;
 use binparse_dsl as ast;
 use proc_macro2::TokenStream;
 use quote::{format_ident, quote};
 
-use crate::{Len, struct_::DoneField};
+use crate::struct_::DoneField;
 
 pub(crate) struct FieldCtx<'a> {
     pub(crate) field: &'a ast::Field<'a>,
@@ -11,7 +12,12 @@ pub(crate) struct FieldCtx<'a> {
 }
 
 #[derive(Debug, thiserror::Error)]
-pub enum Error {}
+pub enum Error {
+    #[error("type needs alignment but is not aligned itself")]
+    UnalignedType,
+    #[error("type needs alignment, but the start offset ({0:?}) is not aligned")]
+    InvalidAlignment(Len),
+}
 
 pub(crate) struct GeneratedField {
     pub(crate) len: Option<Len>,
@@ -38,44 +44,76 @@ impl<'a> FieldCtx<'a> {
         // TODO: we need to handle lens which depend on some previous field, probably by making
         //       the `GeneratedField.len` it's own enum type
         let field_name = format_ident!("{}", self.field.name);
+        let offset_getter_fn_name = format_ident!("{}_end_offset", field_name);
 
-        let (len, definitions, field_getter) = match &self.field.value {
+        let (len, definitions, needs_alignment, field_getter) = match &self.field.value {
             ast::FieldValue::Type(ty) => match ty {
                 ast::Type::Primitive(p) => {
-                    let (len, def, _needs_alignment) = match_primitive(p);
-                    (
-                        Some(len),
-                        quote! { #field_name: #def, },
-                        quote! {
-                            pub fn #field_name(&self) -> #def {
+                    let (len, def, needs_alignment) = match_primitive(p);
+
+                    if needs_alignment && len.bit > 0 {
+                        return Err(Error::UnalignedType);
+                    }
+
+                    match (&self.start_offset, self.done_fields.last()) {
+                        (Some(offset), _) => {
+                            let end = *offset + len;
+
+                            let start_bit = offset.bit;
+                            let start_byte = offset.byte;
+                            let end_byte = end.byte;
+
+                            let field_getter = if needs_alignment {
                                 todo!()
-                            }
-                        },
-                    )
+                            } else {
+                                quote! {
+                                    pub fn #field_name(&self) -> #def {
+                                        let field_data = self.data[#start_byte..#end_byte];
+                                        #def::from_ne_bytes(field_data)
+                                    }
+                                }
+                            };
+
+                            (
+                                Some(len),
+                                quote! { #field_name: #def, },
+                                needs_alignment,
+                                field_getter,
+                            )
+                        }
+
+                        _ => todo!(),
+                    }
                 }
                 _ => todo!(),
             },
             ast::FieldValue::Constraint(_) => todo!(),
         };
 
-        let offset_getter_fn_name = format_ident!("{}_offset", self.field.name);
         let offset_getter = match self.start_offset {
-            Some(Len {
-                byte: offset_byte,
-                bit: _offset_bit,
-            }) => match &len {
-                Some(Len {
-                    byte: len_byte,
-                    bit: _len_bit,
-                }) => {
-                    quote! {
-                        pub fn #offset_getter_fn_name(&self) -> usize {
-                            #offset_byte + #len_byte
+            Some(offset) => {
+                if needs_alignment && offset.bit > 0 {
+                    return Err(Error::InvalidAlignment(offset));
+                }
+
+                match &len {
+                    Some(len) => {
+                        let total_len = offset + *len;
+                        let total_byte = total_len.byte;
+                        let total_bit = total_len.bit;
+
+                        quote! {
+                            pub fn #offset_getter_fn_name(&self) -> binparse::Len {
+                                binparse::Len {
+                                    byte: #total_byte,
+                                    bit: #total_bit,
+                                }
+                            }
                         }
                     }
+                    None => todo!(),
                 }
-                None => todo!(),
-            },
+            }
             _ => todo!(),
         };
 

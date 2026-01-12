@@ -5,7 +5,6 @@ pub enum Primitive {
     U32,
     U64,
     U128,
-    BitField(u8), // b<N>
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -125,6 +124,7 @@ pub struct ArrayType<'a> {
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum Type<'a> {
+    BitField(u8), // b<N>
     Primitive(Primitive),
     Array(Box<ArrayType<'a>>),
     StructRef(Vec<&'a str>), // Reference to another struct

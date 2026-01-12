@@ -2,7 +2,6 @@ use std::collections::{HashMap, HashSet};
 
 use binparse_dsl as ast;
 use proc_macro2::TokenStream;
-use quote::quote;
 
 use struct_::*;
 
@@ -34,32 +33,11 @@ impl<'a> Todo<'a> {
 pub enum Error {
     #[error("duplicate struct definition '{name}'")]
     DuplicateStruct { name: String },
-    #[error("failed to generate struct '{name}'")]
+    #[error("failed to generate struct '{name}': {source}")]
     GenerateStruct {
         name: String,
-        #[source]
-        error: struct_::Error,
+        source: struct_::Error,
     },
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
-struct Len {
-    byte: usize,
-    bit: usize,
-}
-
-impl std::ops::Add for Len {
-    type Output = Self;
-
-    fn add(self, other: Self) -> Self {
-        let mut byte = self.byte + other.byte;
-        let mut bit = self.bit + other.bit;
-        if bit >= 8 {
-            byte += 1;
-            bit -= 8;
-        }
-        Self { byte, bit }
-    }
 }
 
 impl<'a> CodeGen<'a> {
@@ -113,12 +91,13 @@ impl<'a> CodeGen<'a> {
             for root in roots.drain(..) {
                 let todo = me.todo.remove(root).expect("root not found in todo");
 
-                let generated = StructCtx::new(todo.origin, &me.done)
-                    .generate()
-                    .map_err(|e| Error::GenerateStruct {
-                        name: root.to_string(),
-                        error: e,
-                    })?;
+                let generated =
+                    StructCtx::new(todo.origin, &me.done)
+                        .generate()
+                        .map_err(|source| Error::GenerateStruct {
+                            name: root.to_string(),
+                            source,
+                        })?;
                 me.done.insert(root, generated);
             }
 

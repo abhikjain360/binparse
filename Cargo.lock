@@ -63,9 +63,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "binparse"
+version = "0.1.0"
+
+[[package]]
 name = "binparse-codegen"
 version = "0.1.0"
 dependencies = [
+ "binparse",
  "binparse-dsl",
  "binparse-dsl-parse",
  "prettyplease",

@@ -9,6 +9,8 @@ struct Header {
 
 fn main() {
     let ast = binparse_dsl_parse::parse_str(DSL_STRING).unwrap();
-    let code = binparse_codegen::CodeGen::generate(&ast).unwrap();
+    let code = binparse_codegen::CodeGen::generate(&ast)
+        .inspect_err(|e| eprintln!("{e}"))
+        .unwrap();
     println!("{code}");
 }

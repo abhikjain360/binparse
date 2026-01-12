@@ -1,25 +1,29 @@
 use std::collections::HashMap;
 
+use binparse::Len;
 use binparse_dsl as ast;
 use proc_macro2::TokenStream;
-use quote::quote;
+use quote::{format_ident, quote};
 
-use crate::Len;
 use crate::field::FieldCtx;
 
 pub(crate) struct StructCtx<'a> {
     pub(crate) origin: &'a ast::Struct<'a>,
     pub(crate) offset: Option<Len>,
     done_fields: Vec<DoneField<'a>>,
+    #[expect(dead_code)]
     pub(crate) done: &'a HashMap<&'a str, GeneratedStruct>,
 }
 
+#[expect(dead_code)]
 pub(crate) struct DoneField<'a> {
     origin: &'a ast::Field<'a>,
     len: Option<Len>,
+    offset_getter_fn_name: syn::Ident,
 }
 
 pub(crate) struct GeneratedStruct {
+    #[expect(dead_code)]
     pub(crate) len: Option<Len>,
     pub(crate) tokens: TokenStream,
 }
@@ -32,6 +36,8 @@ pub enum Error {
         #[source]
         error: crate::field::Error,
     },
+    #[error("'field {field}' needs byte-alignment, but previous fields didn't align")]
+    Unaligned { field: String },
 }
 
 impl<'a> StructCtx<'a> {
@@ -52,7 +58,7 @@ impl<'a> StructCtx<'a> {
         let mut functions = TokenStream::new();
 
         let mut parser_impl = TokenStream::new();
-        let mut parser_ret = TokenStream::new();
+        let parser_ret = TokenStream::new();
 
         for item in &self.origin.items {
             if let ast::StructItem::Field(field) = item {
@@ -67,7 +73,6 @@ impl<'a> StructCtx<'a> {
                 functions.extend(generated.field_getter);
                 functions.extend(generated.offset_getter);
 
-                // Update offset for next field
                 self.offset = match (self.offset, generated.len) {
                     (Some(current), Some(field_len)) => {
                         let fn_name = &generated.offset_getter_fn_name;
@@ -78,10 +83,16 @@ impl<'a> StructCtx<'a> {
                     }
                     _ => None,
                 };
+
+                self.done_fields.push(DoneField {
+                    origin: field,
+                    len: generated.len,
+                    offset_getter_fn_name: generated.offset_getter_fn_name,
+                });
             }
         }
 
-        let name = self.origin.name;
+        let name = format_ident!("{}", self.origin.name);
         let tokens = quote! {
             pub struct #name<'a> {
                 data: &'a [u8],
@@ -89,9 +100,9 @@ impl<'a> StructCtx<'a> {
             }
 
             impl<'a> #name<'a> {
-                pub fn parse(data: &'a [u8]) -> Option<(Self, &'a [u8]) {
+                pub fn parse(data: &'a [u8]) -> Option<(Self, &'a [u8])> {
                     #parser_impl
-                    #parser_ret
+                    Self { #parser_ret }
                 }
 
                 #functions

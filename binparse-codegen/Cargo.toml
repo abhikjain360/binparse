@@ -4,6 +4,7 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
+binparse = { path = "../binparse" }
 binparse-dsl = { path = "../binparse-dsl" }
 
 prettyplease = "0.2.37"
