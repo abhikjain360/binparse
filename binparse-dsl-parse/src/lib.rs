@@ -364,12 +364,17 @@ fn primitive(input: &mut Input<'_>) -> winnow::Result<ast::Primitive> {
             "u64".map(|_| ast::Primitive::U64),
             "u128".map(|_| ast::Primitive::U128),
         )),
-        'b' => ("b", delimited('<', digit1, '>')).try_map(|(_, w_str): (&str, &str)| {
-            w_str.parse::<u8>()
-        }).verify(|w| *w <= 8).map(ast::Primitive::BitField),
         _ => fail
     }
     .parse_next(input)
+}
+
+fn bit_field_type<'a>(input: &mut Input<'a>) -> winnow::Result<ast::Type<'a>> {
+    ("b", delimited('<', digit1, '>'))
+        .try_map(|(_, w_str): (&str, &str)| w_str.parse::<u8>())
+        .verify(|w| *w <= 8)
+        .map(ast::Type::BitField)
+        .parse_next(input)
 }
 
 fn type_parser<'a>(input: &mut Input<'a>) -> winnow::Result<ast::Type<'a>> {
@@ -378,6 +383,7 @@ fn type_parser<'a>(input: &mut Input<'a>) -> winnow::Result<ast::Type<'a>> {
         concat_type,
         union_type,
         primitive.map(ast::Type::Primitive),
+        bit_field_type,
         padded(path).map(ast::Type::StructRef),
     ))
     .parse_next(input)

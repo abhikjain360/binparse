@@ -46,40 +46,26 @@ impl<'a> FieldCtx<'a> {
         let field_name = format_ident!("{}", self.field.name);
         let offset_getter_fn_name = format_ident!("{}_end_offset", field_name);
 
-        let (len, definitions, needs_alignment, field_getter) = match &self.field.value {
+        let (len, definitions, field_getter) = match &self.field.value {
             ast::FieldValue::Type(ty) => match ty {
                 ast::Type::Primitive(p) => {
-                    let (len, def, needs_alignment) = match_primitive(p);
-
-                    if needs_alignment && len.bit > 0 {
-                        return Err(Error::UnalignedType);
-                    }
+                    let (len, def) = match_primitive(p);
 
                     match (&self.start_offset, self.done_fields.last()) {
                         (Some(offset), _) => {
                             let end = *offset + len;
 
-                            let start_bit = offset.bit;
                             let start_byte = offset.byte;
                             let end_byte = end.byte;
 
-                            let field_getter = if needs_alignment {
-                                todo!()
-                            } else {
-                                quote! {
-                                    pub fn #field_name(&self) -> #def {
-                                        let field_data = self.data[#start_byte..#end_byte];
-                                        #def::from_ne_bytes(field_data)
-                                    }
+                            let field_getter = quote! {
+                                pub fn #field_name(&self) -> #def {
+                                    let field_data = self.data[#start_byte..#end_byte];
+                                    #def::from_ne_bytes(field_data)
                                 }
                             };
 
-                            (
-                                Some(len),
-                                quote! { #field_name: #def, },
-                                needs_alignment,
-                                field_getter,
-                            )
+                            (Some(len), quote! { #field_name: #def, }, field_getter)
                         }
 
                         _ => todo!(),
@@ -92,9 +78,9 @@ impl<'a> FieldCtx<'a> {
 
         let offset_getter = match self.start_offset {
             Some(offset) => {
-                if needs_alignment && offset.bit > 0 {
-                    return Err(Error::InvalidAlignment(offset));
-                }
+                // if needs_alignment && offset.bit > 0 {
+                //     return Err(Error::InvalidAlignment(offset));
+                // }
 
                 match &len {
                     Some(len) => {
@@ -127,20 +113,20 @@ impl<'a> FieldCtx<'a> {
     }
 }
 
-fn match_primitive(primitive: &ast::Primitive) -> (Len, TokenStream, bool) {
+fn match_primitive(primitive: &ast::Primitive) -> (Len, TokenStream) {
     match primitive {
-        ast::Primitive::U8 => (Len { byte: 1, bit: 0 }, quote! { u8 }, true),
-        ast::Primitive::U16 => (Len { byte: 2, bit: 0 }, quote! { u16 }, true),
-        ast::Primitive::U32 => (Len { byte: 4, bit: 0 }, quote! { u32 }, true),
-        ast::Primitive::U64 => (Len { byte: 8, bit: 0 }, quote! { u64 }, true),
-        ast::Primitive::U128 => (Len { byte: 16, bit: 0 }, quote! { u128 }, true),
-        ast::Primitive::BitField(width) => (
-            Len {
-                byte: 0,
-                bit: *width as usize % 8,
-            },
-            quote! { u8 },
-            false,
-        ),
+        ast::Primitive::U8 => (Len { byte: 1, bit: 0 }, quote! { u8 }),
+        ast::Primitive::U16 => (Len { byte: 2, bit: 0 }, quote! { u16 }),
+        ast::Primitive::U32 => (Len { byte: 4, bit: 0 }, quote! { u32 }),
+        ast::Primitive::U64 => (Len { byte: 8, bit: 0 }, quote! { u64 }),
+        ast::Primitive::U128 => (Len { byte: 16, bit: 0 }, quote! { u128 }),
+        // ast::Primitive::BitField(width) => (
+        //     Len {
+        //         byte: 0,
+        //         bit: *width as usize % 8,
+        //     },
+        //     quote! { u8 },
+        //     false,
+        // ),
     }
 }
