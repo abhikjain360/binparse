@@ -138,9 +138,9 @@ impl<'a> CodeGen<'a> {
             for root in roots.drain(..) {
                 let todo = me.todo.remove(root).expect("root not found in todo");
 
+                let mut accum = StructAccum::new(todo.origin.name, &me.done);
                 let generated =
-                    StructCtx::new(todo.origin, &me.done)
-                        .generate()
+                    struct_::generate(todo.origin, &mut accum)
                         .map_err(|source| Error::GenerateStruct {
                             name: root.to_string(),
                             source,

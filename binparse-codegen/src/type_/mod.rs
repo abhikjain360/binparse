@@ -1,13 +1,8 @@
-use std::collections::HashMap;
-
 use binparse::Len;
 use binparse_dsl as ast;
 use proc_macro2::TokenStream;
 
-use crate::{
-    GeneratedLen,
-    struct_::{DoneField, GeneratedStruct},
-};
+use crate::{GeneratedLen, field::FieldAccum, struct_::DoneFieldType};
 
 pub(crate) mod array;
 pub(crate) mod bitfield;
@@ -16,13 +11,17 @@ pub(crate) mod primitive;
 pub(crate) mod struct_ref;
 pub(crate) mod union_;
 
-pub(crate) struct GeneratedType {
-    pub(crate) len: GeneratedLen,
+pub(crate) struct TypeAccum<'a> {
+    pub(crate) field_accum: &'a mut FieldAccum<'a>,
     pub(crate) definitions: TokenStream,
     pub(crate) helper_fns: TokenStream,
-    pub(crate) helper_entities: TokenStream,
+}
+
+pub(crate) struct GeneratedTypeInfo {
+    pub(crate) len: GeneratedLen,
     pub(crate) field_getter_body: TokenStream,
     pub(crate) return_ty: TokenStream,
+    pub(crate) field_type: DoneFieldType,
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -45,67 +44,29 @@ pub enum Error {
     Field(Box<crate::field::Error>),
 }
 
-pub(crate) struct TypeCtx<'a, 'b> {
-    pub(crate) done: &'a HashMap<&'a str, GeneratedStruct>,
-    pub(crate) parent_struct_name: &'b syn::Ident,
+impl<'a> TypeAccum<'a> {
+    pub(crate) fn new(field_accum: &'a mut FieldAccum<'a>) -> Self {
+        Self {
+            field_accum,
+            definitions: TokenStream::new(),
+            helper_fns: TokenStream::new(),
+        }
+    }
 }
 
-impl<'a, 'b> TypeCtx<'a, 'b> {
-    pub(crate) fn generate(
-        &self,
-        ty: &'a ast::Type<'a>,
-        field_name: &syn::Ident,
-        start_offset: GeneratedLen,
-        done_fields: &'a [DoneField<'a>],
-    ) -> Result<GeneratedType, Error> {
-        match ty {
-            ast::Type::Primitive(p) => primitive::PrimitiveCtx {
-                primitive: p,
-                start_offset,
-            }
-            .generate(),
-
-            ast::Type::BitField(width) => bitfield::BitFieldCtx {
-                width: *width as usize,
-                start_offset,
-            }
-            .generate(),
-
-            ast::Type::Concat(items) => concat::ConcatCtx {
-                items,
-                field_name,
-                start_offset,
-                done_fields,
-                done: self.done,
-                parent_struct_name: self.parent_struct_name,
-            }
-            .generate(),
-
-            ast::Type::StructRef(struct_name) => struct_ref::StructRefCtx {
-                struct_name,
-                start_offset,
-                done: self.done,
-            }
-            .generate(),
-
-            ast::Type::Array(array_type) => array::ArrayCtx {
-                array_type,
-                field_name,
-                done_fields,
-                start_offset,
-                done: self.done,
-            }
-            .generate(),
-
-            ast::Type::Union(u) => union_::UnionCtx {
-                union: u,
-                field_name,
-                parent_struct_name: self.parent_struct_name,
-                start_offset,
-                done_fields,
-                done: self.done,
-            }
-            .generate(),
+pub(crate) fn generate(
+    ast: &ast::Type<'_>,
+    field_accum: &mut FieldAccum<'_>,
+) -> Result<GeneratedTypeInfo, Error> {
+    let start_offset = field_accum.struct_accum.offset.clone() + field_accum.len.clone();
+    match ast {
+        ast::Type::Primitive(p) => primitive::generate(*p, start_offset),
+        ast::Type::BitField(width) => bitfield::generate(*width as usize, start_offset),
+        ast::Type::Concat(items) => concat::generate(items, field_accum, start_offset),
+        ast::Type::StructRef(struct_name) => {
+            struct_ref::generate(struct_name, field_accum, start_offset)
         }
+        ast::Type::Array(array_type) => array::generate(array_type, field_accum, start_offset),
+        ast::Type::Union(u) => union_::generate(u, field_accum, start_offset),
     }
 }
