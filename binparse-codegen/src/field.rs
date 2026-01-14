@@ -87,7 +87,7 @@ impl<'a, 'b> FieldCtx<'a, 'b> {
                 )
             }
 
-            ast::FieldValue::Constraint(_) => todo!(),
+            ast::FieldValue::Constraint(_) => todo!("handle constraint-type fields"),
         };
 
         let offset_getter = match len.clone() + self.start_offset {

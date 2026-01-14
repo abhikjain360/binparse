@@ -142,7 +142,7 @@ pub enum ArrayElemType<'a> {
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum ArraySize<'a> {
-    Unsized,
+    Dynamic,
     Path(Vec<&'a str>),
     Int(IntLiteral),
     Binary(Box<ArraySizeBinary<'a>>),

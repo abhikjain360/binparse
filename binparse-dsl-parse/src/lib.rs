@@ -481,7 +481,7 @@ fn array_type<'a>(input: &mut Input<'a>) -> ModalResult<ast::Type<'a>> {
         padded('['),
         (
             array_elem_type,
-            opt(preceded(padded(';'), array_size)).map(|s| s.unwrap_or(ast::ArraySize::Unsized)),
+            opt(preceded(padded(';'), array_size)).map(|s| s.unwrap_or(ast::ArraySize::Dynamic)),
         ),
         padded(']'),
     )

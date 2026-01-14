@@ -216,7 +216,7 @@ impl ArrayCtx<'_, '_> {
         size: &ast::ArraySize,
     ) -> Result<(proc_macro2::TokenStream, Option<usize>), Error> {
         match size {
-            ast::ArraySize::Unsized => todo!("try from attributes"),
+            ast::ArraySize::Dynamic => todo!("try from attributes"),
 
             ast::ArraySize::Path(path) => {
                 let field_name = path.first().ok_or(Error::EmptyPath)?;
