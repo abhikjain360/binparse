@@ -109,6 +109,7 @@ pub enum StructItem<'a> {
 pub enum UnionMatcher<'a> {
     Literal(Literal<'a>),
     Wildcard,
+    Tuple(Vec<UnionMatcher<'a>>),
 }
 
 #[derive(Debug, Clone, PartialEq)]

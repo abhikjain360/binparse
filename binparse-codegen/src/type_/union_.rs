@@ -14,10 +14,12 @@ use crate::{
 
 #[derive(Debug, thiserror::Error)]
 pub enum Error {
-    #[error("union must have exactly one discriminant")]
-    MultipleDiscriminants,
+    #[error("union has no arguments")]
+    NoArguments,
     #[error("union has no variants")]
     NoVariants,
+    #[error("matcher has {got} elements but union has {expected} arguments")]
+    MatcherCountMismatch { expected: usize, got: usize },
 }
 
 pub(crate) struct UnionCtx<'a, 'b> {
@@ -32,8 +34,12 @@ pub(crate) struct UnionCtx<'a, 'b> {
 
 impl UnionCtx<'_, '_> {
     pub(crate) fn generate(self) -> Result<GeneratedType, super::Error> {
-        if self.union.args.len() != 1 {
-            todo!("multi-discriminant unions");
+        let num_args = self.union.args.len();
+        if num_args == 0 {
+            return Err(super::Error::Union(Error::NoArguments));
+        }
+        if self.union.variants.is_empty() {
+            return Err(super::Error::Union(Error::NoVariants));
         }
 
         let start_byte: TokenStream = match &self.start_offset {
@@ -49,7 +55,19 @@ impl UnionCtx<'_, '_> {
             }
         };
 
-        let discriminant = format_ident!("{}", self.union.args[0]);
+        let discriminants: Vec<_> = self
+            .union
+            .args
+            .iter()
+            .map(|arg| format_ident!("{}", arg))
+            .collect();
+        let match_expr = if discriminants.len() == 1 {
+            let d = &discriminants[0];
+            quote! { self.#d() }
+        } else {
+            let getters = discriminants.iter().map(|d| quote! { self.#d() });
+            quote! { (#(#getters),*) }
+        };
         let enum_name = format_ident!("{}_{}", self.parent_struct_name, self.field_name);
 
         let mut variant_structs = TokenStream::new();
@@ -58,6 +76,16 @@ impl UnionCtx<'_, '_> {
         let mut len_match_arms = TokenStream::new();
 
         for variant in &self.union.variants {
+            for matcher in &variant.matchers {
+                let arity = Self::matcher_arity(matcher);
+                if arity != num_args {
+                    return Err(super::Error::Union(Error::MatcherCountMismatch {
+                        expected: num_args,
+                        got: arity,
+                    }));
+                }
+            }
+
             let ast::UnionBody::NamedInline(variant_name, items) = &variant.body else {
                 todo!("@error union variants");
             };
@@ -105,13 +133,13 @@ impl UnionCtx<'_, '_> {
         };
 
         let field_getter_body = quote! {
-            match self.#discriminant() {
+            match #match_expr {
                 #match_arms
             }
         };
 
         let len = GeneratedLen::Dynamic(quote! {
-            match self.#discriminant() {
+            match #match_expr {
                 #len_match_arms
             }
         });
@@ -173,24 +201,37 @@ impl UnionCtx<'_, '_> {
     }
 
     fn generate_matchers(&self, matchers: &[ast::UnionMatcher<'_>]) -> TokenStream {
-        let patterns: Vec<TokenStream> = matchers
-            .iter()
-            .map(|m| match m {
-                ast::UnionMatcher::Literal(ast::Literal::Int(int_lit)) => {
-                    let value = proc_macro2::Literal::usize_unsuffixed(int_lit.value);
-                    quote! { #value }
-                }
-                ast::UnionMatcher::Literal(other) => {
-                    todo!("non-integer literal matcher: {:?}", other)
-                }
-                ast::UnionMatcher::Wildcard => quote! { _ },
-            })
-            .collect();
+        let patterns: Vec<TokenStream> = matchers.iter().map(Self::generate_matcher).collect();
 
         if patterns.len() == 1 {
             patterns.into_iter().next().unwrap()
         } else {
             quote! { #(#patterns)|* }
+        }
+    }
+
+    fn matcher_arity(matcher: &ast::UnionMatcher<'_>) -> usize {
+        match matcher {
+            ast::UnionMatcher::Literal(_) | ast::UnionMatcher::Wildcard => 1,
+            ast::UnionMatcher::Tuple(elements) => elements.len(),
+        }
+    }
+
+    fn generate_matcher(matcher: &ast::UnionMatcher<'_>) -> TokenStream {
+        match matcher {
+            ast::UnionMatcher::Literal(ast::Literal::Int(int_lit)) => {
+                let value = proc_macro2::Literal::usize_unsuffixed(int_lit.value);
+                quote! { #value }
+            }
+            ast::UnionMatcher::Literal(other) => {
+                todo!("non-integer literal matcher: {:?}", other)
+            }
+            ast::UnionMatcher::Wildcard => quote! { _ },
+            ast::UnionMatcher::Tuple(elements) => {
+                let element_patterns: Vec<_> =
+                    elements.iter().map(Self::generate_matcher).collect();
+                quote! { (#(#element_patterns),*) }
+            }
         }
     }
 }

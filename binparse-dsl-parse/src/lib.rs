@@ -549,10 +549,23 @@ fn union_body<'a>(input: &mut Input<'a>) -> ModalResult<ast::UnionBody<'a>> {
     .parse_next(input)
 }
 
-fn union_matcher<'a>(input: &mut Input<'a>) -> ModalResult<ast::UnionMatcher<'a>> {
+fn union_matcher_simple<'a>(input: &mut Input<'a>) -> ModalResult<ast::UnionMatcher<'a>> {
     padded(alt((
         "_".map(|_| ast::UnionMatcher::Wildcard),
         literal.map(ast::UnionMatcher::Literal),
+    )))
+    .parse_next(input)
+}
+
+fn union_matcher<'a>(input: &mut Input<'a>) -> ModalResult<ast::UnionMatcher<'a>> {
+    padded(alt((
+        delimited(
+            padded('('),
+            separated(1.., union_matcher_simple, padded(',')),
+            padded(')'),
+        )
+        .map(ast::UnionMatcher::Tuple),
+        union_matcher_simple,
     )))
     .parse_next(input)
 }
