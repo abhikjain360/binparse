@@ -138,14 +138,12 @@ impl<'a> CodeGen<'a> {
             for root in roots.drain(..) {
                 let todo = me.todo.remove(root).expect("root not found in todo");
 
-                let mut accum = StructAccum::new(todo.origin.name, &me.done);
-                let generated =
-                    struct_::generate(todo.origin, &mut accum)
-                        .map_err(|source| Error::GenerateStruct {
-                            name: root.to_string(),
-                            source,
-                        })?;
-                me.done.insert(root, generated);
+                struct_::generate(todo.origin, &mut me.done).map_err(|source| {
+                    Error::GenerateStruct {
+                        name: root.to_string(),
+                        source,
+                    }
+                })?;
 
                 for dependant in todo.dependants {
                     let dependant_todo = me.todo.get_mut(dependant).expect("dependant not found");

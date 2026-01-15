@@ -1,3 +1,5 @@
+use std::collections::HashMap;
+
 use binparse::Len;
 use binparse_dsl as ast;
 use proc_macro2::TokenStream;
@@ -6,7 +8,7 @@ use quote::{format_ident, quote};
 use crate::{
     GeneratedLen,
     field::FieldAccum,
-    struct_::DoneFieldType,
+    struct_::{DoneFieldType, GeneratedStruct, StructAccum},
     type_::{self, GeneratedTypeInfo},
 };
 
@@ -16,9 +18,11 @@ pub enum Error {
     UnknownItemLen(usize),
 }
 
-pub(crate) fn generate(
-    items: &[ast::ConcatItem<'_>],
-    field_accum: &mut FieldAccum<'_>,
+pub(crate) fn generate<'a>(
+    items: &[ast::ConcatItem<'a>],
+    done: &HashMap<&'a str, GeneratedStruct>,
+    struct_accum: &mut StructAccum,
+    field_accum: &mut FieldAccum,
     start_offset: GeneratedLen,
 ) -> Result<GeneratedTypeInfo, type_::Error> {
     match start_offset {
@@ -28,15 +32,23 @@ pub(crate) fn generate(
             let mut field_exprs = TokenStream::new();
 
             let mut current_offset = GeneratedLen::Fixed(start_offset_len);
-            let field_name = &field_accum.field_name;
 
             for (i, item) in items.iter().enumerate() {
-                let item_name = format_ident!("{}_{}", field_name, i);
+                let item_name = {
+                    let field_name = &field_accum.field_name;
+                    format_ident!("{}_{}", field_name, i)
+                };
 
-                let info = type_::generate(&item.ty, field_accum, current_offset.clone())?;
+                let info = type_::generate(
+                    &item.ty,
+                    done,
+                    struct_accum,
+                    field_accum,
+                    current_offset.clone(),
+                )?;
 
-                let return_ty = &info.return_ty;
-                let field_getter_body = &info.field_getter_body;
+                let return_ty = info.return_ty;
+                let field_getter_body = info.field_getter_body;
                 field_accum.helper_fns.extend(quote! {
                     #[allow(clippy::identity_op)]
                     pub fn #item_name(&self) -> #return_ty {
@@ -44,11 +56,12 @@ pub(crate) fn generate(
                     }
                 });
 
-                field_types.push(info.return_ty.clone());
+                field_types.push(return_ty);
                 field_exprs.extend(quote! { self.#item_name(), });
 
-                total_len = total_len + info.len.clone();
-                current_offset = info.len + current_offset;
+                let item_len = info.len;
+                total_len = total_len + item_len.clone();
+                current_offset = item_len + current_offset;
             }
 
             let field_getter_body = quote! {

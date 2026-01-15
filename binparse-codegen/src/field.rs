@@ -1,15 +1,16 @@
+use std::collections::HashMap;
+
 use binparse_dsl as ast;
 use proc_macro2::TokenStream;
 use quote::{format_ident, quote};
 
 use crate::{
     GeneratedLen,
-    struct_::{DoneField, DoneFieldType, StructAccum},
+    struct_::{DoneField, DoneFieldType, GeneratedStruct, StructAccum},
     type_,
 };
 
-pub(crate) struct FieldAccum<'a> {
-    pub(crate) struct_accum: &'a mut StructAccum<'a>,
+pub(crate) struct FieldAccum {
     pub(crate) field_name: syn::Ident,
     pub(crate) len: GeneratedLen,
     pub(crate) field_type: DoneFieldType,
@@ -28,12 +29,11 @@ pub enum Error {
     UnknownOffset,
 }
 
-impl<'a> FieldAccum<'a> {
-    pub(crate) fn new(struct_accum: &'a mut StructAccum<'a>, field_name: &str) -> Self {
+impl FieldAccum {
+    pub(crate) fn new(field_name: &str) -> Self {
         let field_name_ident = format_ident!("{}", field_name);
         let offset_getter_fn_name = format_ident!("{}_end_offset", field_name);
         Self {
-            struct_accum,
             field_name: field_name_ident,
             len: GeneratedLen::Fixed(binparse::Len { byte: 0, bit: 0 }),
             field_type: DoneFieldType::Other,
@@ -46,20 +46,25 @@ impl<'a> FieldAccum<'a> {
     }
 }
 
-pub(crate) fn generate(
-    ast: &ast::Field<'_>,
-    struct_accum: &mut StructAccum<'_>,
+pub(crate) fn generate<'a>(
+    ast: &ast::Field<'a>,
+    done: &HashMap<&'a str, GeneratedStruct>,
+    struct_accum: &mut StructAccum,
 ) -> Result<(), Error> {
-    let mut field_accum = FieldAccum::new(struct_accum, ast.name);
+    let mut field_accum = FieldAccum::new(ast.name);
 
     match &ast.value {
         ast::FieldValue::Type(ty) => {
-            let info = type_::generate(ty, &mut field_accum)?;
+            let start_offset = struct_accum.offset.clone();
+            let info = type_::generate(ty, done, struct_accum, &mut field_accum, start_offset)?;
+
+            field_accum.len = info.len;
+            field_accum.field_type = info.field_type;
 
             let field_name = &field_accum.field_name;
             let return_ty = info.return_ty;
             let field_getter_body = info.field_getter_body;
-            let field_getter = quote! {
+            field_accum.field_getter = quote! {
                 #[allow(clippy::identity_op)]
                 pub fn #field_name(&self) -> #return_ty {
                     #field_getter_body
@@ -74,7 +79,13 @@ pub(crate) fn generate(
     let len = field_accum.len;
     let field_type = field_accum.field_type;
 
-    let offset_getter = match len.clone() + field_accum.struct_accum.offset.clone() {
+    let start_offset = std::mem::replace(
+        &mut struct_accum.offset,
+        GeneratedLen::Fixed(binparse::Len { byte: 0, bit: 0 }),
+    );
+    let end_offset = start_offset + len.clone();
+
+    field_accum.offset_getter = match &end_offset {
         GeneratedLen::Fixed(total_len) => {
             let total_byte = total_len.byte;
             let total_bit = total_len.bit;
@@ -93,7 +104,7 @@ pub(crate) fn generate(
         }
     };
 
-    struct_accum.offset = struct_accum.offset.clone() + len.clone();
+    struct_accum.offset = end_offset;
     struct_accum.done_fields.push(DoneField {
         name: ast.name.to_string(),
         field_type,

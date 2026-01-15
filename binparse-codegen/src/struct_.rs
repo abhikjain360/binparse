@@ -21,11 +21,10 @@ pub(crate) struct DoneField {
     pub(crate) offset_getter_fn_name: syn::Ident,
 }
 
-pub(crate) struct StructAccum<'a> {
+pub(crate) struct StructAccum {
     pub(crate) name: syn::Ident,
     pub(crate) offset: GeneratedLen,
     pub(crate) done_fields: Vec<DoneField>,
-    pub(crate) done: &'a HashMap<&'a str, GeneratedStruct>,
     pub(crate) other_entities: TokenStream,
     pub(crate) field_definitions: TokenStream,
     pub(crate) functions: TokenStream,
@@ -49,13 +48,12 @@ pub enum Error {
     Unaligned { field: String },
 }
 
-impl<'a> StructAccum<'a> {
-    pub(crate) fn new(name: &str, done: &'a HashMap<&'a str, GeneratedStruct>) -> Self {
+impl StructAccum {
+    pub(crate) fn new(name: &str) -> Self {
         Self {
             name: format_ident!("{}", name),
             offset: GeneratedLen::Fixed(Len { byte: 0, bit: 0 }),
             done_fields: vec![],
-            done,
             other_entities: TokenStream::new(),
             field_definitions: TokenStream::new(),
             functions: TokenStream::new(),
@@ -66,13 +64,13 @@ impl<'a> StructAccum<'a> {
 
 pub(crate) fn generate<'a>(
     ast: &'a ast::Struct<'a>,
-    done: &'a mut HashMap<&'a str, GeneratedStruct>,
+    done: &mut HashMap<&'a str, GeneratedStruct>,
 ) -> Result<(), Error> {
-    let mut accum = StructAccum::new(ast.name, done);
+    let mut accum = StructAccum::new(ast.name);
 
     for item in &ast.items {
         if let ast::StructItem::Field(ast_field) = item {
-            field::generate(ast_field, &mut accum).map_err(|error| Error::Field {
+            field::generate(ast_field, done, &mut accum).map_err(|error| Error::Field {
                 name: ast_field.name.to_string(),
                 error,
             })?;
@@ -81,10 +79,17 @@ pub(crate) fn generate<'a>(
         }
     }
 
-    let name = &accum.name;
-    let other_entities = &accum.other_entities;
+    let StructAccum {
+        name,
+        offset,
+        done_fields: _,
+        other_entities,
+        field_definitions,
+        functions,
+        last_offset_getter_fn_name,
+    } = accum;
 
-    let parse_fn = if let Some(fn_name) = accum.last_offset_getter_fn_name {
+    let parse_fn = if let Some(fn_name) = last_offset_getter_fn_name {
         quote! {
             pub fn parse(data: &'a [u8]) -> Result<(Self, &'a [u8]), binparse::ParseError> {
                 let me = Self { data };
@@ -106,8 +111,6 @@ pub(crate) fn generate<'a>(
         }
     };
 
-    let field_definitions = accum.field_definitions;
-    let functions = accum.functions;
     let tokens = quote! {
         #other_entities
 
@@ -127,7 +130,7 @@ pub(crate) fn generate<'a>(
     done.insert(
         ast.name,
         GeneratedStruct {
-            len: accum.offset.clone(),
+            len: offset,
             tokens,
         },
     );

@@ -4,7 +4,7 @@ use quote::quote;
 use crate::{
     GeneratedLen,
     struct_::DoneFieldType,
-    type_::{Error, GeneratedTypeInfo, TypeAccum},
+    type_::{Error, GeneratedTypeInfo},
 };
 
 pub(crate) fn generate(

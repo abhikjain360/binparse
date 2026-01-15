@@ -1,8 +1,14 @@
+use std::collections::HashMap;
+
 use binparse::Len;
 use binparse_dsl as ast;
 use proc_macro2::TokenStream;
 
-use crate::{GeneratedLen, field::FieldAccum, struct_::DoneFieldType};
+use crate::{
+    GeneratedLen,
+    field::FieldAccum,
+    struct_::{DoneFieldType, GeneratedStruct, StructAccum},
+};
 
 pub(crate) mod array;
 pub(crate) mod bitfield;
@@ -10,12 +16,6 @@ pub(crate) mod concat;
 pub(crate) mod primitive;
 pub(crate) mod struct_ref;
 pub(crate) mod union_;
-
-pub(crate) struct TypeAccum<'a> {
-    pub(crate) field_accum: &'a mut FieldAccum<'a>,
-    pub(crate) definitions: TokenStream,
-    pub(crate) helper_fns: TokenStream,
-}
 
 pub(crate) struct GeneratedTypeInfo {
     pub(crate) len: GeneratedLen,
@@ -44,29 +44,25 @@ pub enum Error {
     Field(Box<crate::field::Error>),
 }
 
-impl<'a> TypeAccum<'a> {
-    pub(crate) fn new(field_accum: &'a mut FieldAccum<'a>) -> Self {
-        Self {
-            field_accum,
-            definitions: TokenStream::new(),
-            helper_fns: TokenStream::new(),
-        }
-    }
-}
-
-pub(crate) fn generate(
-    ast: &ast::Type<'_>,
-    field_accum: &mut FieldAccum<'_>,
+pub(crate) fn generate<'a>(
+    ast: &ast::Type<'a>,
+    done: &HashMap<&'a str, GeneratedStruct>,
+    struct_accum: &mut StructAccum,
+    field_accum: &mut FieldAccum,
+    start_offset: GeneratedLen,
 ) -> Result<GeneratedTypeInfo, Error> {
-    let start_offset = field_accum.struct_accum.offset.clone() + field_accum.len.clone();
     match ast {
         ast::Type::Primitive(p) => primitive::generate(*p, start_offset),
         ast::Type::BitField(width) => bitfield::generate(*width as usize, start_offset),
-        ast::Type::Concat(items) => concat::generate(items, field_accum, start_offset),
-        ast::Type::StructRef(struct_name) => {
-            struct_ref::generate(struct_name, field_accum, start_offset)
+        ast::Type::Concat(items) => {
+            concat::generate(items, done, struct_accum, field_accum, start_offset)
         }
-        ast::Type::Array(array_type) => array::generate(array_type, field_accum, start_offset),
-        ast::Type::Union(u) => union_::generate(u, field_accum, start_offset),
+        ast::Type::StructRef(struct_name) => {
+            struct_ref::generate(struct_name, done, field_accum, start_offset)
+        }
+        ast::Type::Array(array_type) => {
+            array::generate(array_type, done, struct_accum, field_accum, start_offset)
+        }
+        ast::Type::Union(u) => union_::generate(u, done, struct_accum, field_accum, start_offset),
     }
 }

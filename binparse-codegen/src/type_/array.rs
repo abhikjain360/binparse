@@ -1,11 +1,14 @@
+use std::collections::HashMap;
+
 use binparse::Len;
 use binparse_dsl as ast;
 use quote::{format_ident, quote};
 
 use crate::{
     GeneratedLen,
-    struct_::{DoneField, DoneFieldType},
-    type_::{self, GeneratedTypeInfo, TypeAccum},
+    field::FieldAccum,
+    struct_::{DoneField, DoneFieldType, GeneratedStruct, StructAccum},
+    type_::{self, GeneratedTypeInfo},
 };
 
 #[derive(Debug, thiserror::Error)]
@@ -20,7 +23,9 @@ pub enum Error {
 
 pub(crate) fn generate(
     array_type: &ast::ArrayType<'_>,
-    accum: &mut TypeAccum<'_>,
+    done: &HashMap<&str, GeneratedStruct>,
+    struct_accum: &mut StructAccum,
+    accum: &mut FieldAccum,
     start_offset: GeneratedLen,
 ) -> Result<GeneratedTypeInfo, type_::Error> {
     match start_offset {
@@ -29,9 +34,8 @@ pub(crate) fn generate(
                 return Err(type_::Error::InvalidAlignment(start_offset_len));
             }
 
-            let done_fields = &accum.field_accum.struct_accum.done_fields;
-            let done = accum.field_accum.struct_accum.done;
-            let field_name = &accum.field_accum.field_name;
+            let done_fields = &struct_accum.done_fields;
+            let field_name = &accum.field_name;
 
             let (count, static_count) = generate_array_size(&array_type.size, done_fields)?;
 
@@ -79,10 +83,9 @@ pub(crate) fn generate(
                     }
 
                     ast::ArrayElemType::StructRef(struct_name) => {
-                        let generated_struct =
-                            done.get(*struct_name).ok_or_else(|| {
-                                type_::Error::UnknownType(struct_name.to_string())
-                            })?;
+                        let generated_struct = done
+                            .get(*struct_name)
+                            .ok_or_else(|| type_::Error::UnknownType(struct_name.to_string()))?;
                         let struct_ident = format_ident!("{}", struct_name);
                         let return_ty = quote! { #struct_ident<'_> };
                         let iterator_fields = quote! {
@@ -158,7 +161,7 @@ pub(crate) fn generate(
                     }
                 };
 
-            accum.field_accum.struct_accum.other_entities.extend(quote! {
+            struct_accum.other_entities.extend(quote! {
                 #[allow(non_camel_case_types)]
                 struct #iterator_name<'a> {
                     #iterator_fields
@@ -227,9 +230,7 @@ fn generate_array_size(
                     let getter = format_ident!("{}", field_name);
                     Ok((quote! { self.#getter() as usize }, None))
                 }
-                DoneFieldType::Other => {
-                    Err(Error::InvalidSizeType(field_name.to_string()))
-                }
+                DoneFieldType::Other => Err(Error::InvalidSizeType(field_name.to_string())),
             }
         }
 
@@ -245,9 +246,8 @@ fn generate_array_size(
 
             Ok((
                 quote! { (#lhs_tokens #op_tokens #rhs_tokens) as usize },
-                lhs_count.and_then(|lhs_count| {
-                    rhs_count.map(|rhs_count| op_fn(lhs_count, rhs_count))
-                }),
+                lhs_count
+                    .and_then(|lhs_count| rhs_count.map(|rhs_count| op_fn(lhs_count, rhs_count))),
             ))
         }
     }

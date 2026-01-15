@@ -1,6 +1,4 @@
-use std::collections::HashSet;
-
-use binparse::Len;
+use std::collections::{HashMap, HashSet};
 use binparse_dsl as ast;
 use proc_macro2::TokenStream;
 use quote::{format_ident, quote};
@@ -8,8 +6,8 @@ use quote::{format_ident, quote};
 use crate::{
     GeneratedLen,
     field::{self, FieldAccum},
-    struct_::{DoneField, DoneFieldType, StructAccum},
-    type_::{self, GeneratedTypeInfo, TypeAccum},
+    struct_::{DoneFieldType, GeneratedStruct, StructAccum},
+    type_::{self, GeneratedTypeInfo},
 };
 
 #[derive(Debug, thiserror::Error)]
@@ -26,7 +24,9 @@ pub enum Error {
 
 pub(crate) fn generate(
     union: &ast::Union<'_>,
-    accum: &mut TypeAccum<'_>,
+    done: &HashMap<&str, GeneratedStruct>,
+    struct_accum: &mut StructAccum,
+    accum: &mut FieldAccum,
     start_offset: GeneratedLen,
 ) -> Result<GeneratedTypeInfo, type_::Error> {
     let num_args = union.args.len();
@@ -37,9 +37,7 @@ pub(crate) fn generate(
         return Err(type_::Error::Union(Error::NoVariants));
     }
 
-    let done_fields_names = accum
-        .field_accum
-        .struct_accum
+    let done_fields_names = struct_accum
         .done_fields
         .iter()
         .map(|done| done.name.as_str())
@@ -78,9 +76,8 @@ pub(crate) fn generate(
         quote! { (#(#getters),*) }
     };
 
-    let parent_struct_name = &accum.field_accum.struct_accum.name;
-    let field_name = &accum.field_accum.field_name;
-    let done = accum.field_accum.struct_accum.done;
+    let parent_struct_name = &struct_accum.name;
+    let field_name = &accum.field_name;
     let enum_name = format_ident!("{}_{}", parent_struct_name, field_name);
 
     let mut variant_structs = TokenStream::new();
@@ -94,15 +91,9 @@ pub(crate) fn generate(
         };
 
         let variant_ident = format_ident!("{}", variant_name);
-        let struct_name = format_ident!(
-            "{}_{}_{}",
-            parent_struct_name,
-            field_name,
-            variant_name
-        );
+        let struct_name = format_ident!("{}_{}_{}", parent_struct_name, field_name, variant_name);
 
-        let (variant_struct, variant_len) =
-            generate_variant_struct(&struct_name, items, done)?;
+        let (variant_struct, variant_len) = generate_variant_struct(&struct_name, items, done)?;
         variant_structs.extend(variant_struct);
 
         enum_variants.extend(quote! {
@@ -127,7 +118,7 @@ pub(crate) fn generate(
         });
     }
 
-    accum.field_accum.struct_accum.other_entities.extend(quote! {
+    struct_accum.other_entities.extend(quote! {
         #variant_structs
 
         #[allow(non_camel_case_types)]
@@ -159,31 +150,17 @@ pub(crate) fn generate(
 fn generate_variant_struct(
     struct_name: &syn::Ident,
     items: &[ast::StructItem<'_>],
-    done: &std::collections::HashMap<&str, crate::struct_::GeneratedStruct>,
+    done: &HashMap<&str, GeneratedStruct>,
 ) -> Result<(TokenStream, GeneratedLen), type_::Error> {
-    let mut variant_accum = StructAccum::new(&struct_name.to_string(), done);
-    let mut functions = TokenStream::new();
+    let mut variant_accum = StructAccum::new(&struct_name.to_string());
 
     for item in items {
         let ast::StructItem::Field(ast_field) = item else {
             todo!("conditional fields in union variants");
         };
 
-        let mut field_accum = FieldAccum::new(&mut variant_accum, ast_field.name);
-        field::generate(ast_field, &mut field_accum)
+        field::generate(ast_field, done, &mut variant_accum)
             .map_err(|e| type_::Error::Field(Box::new(e)))?;
-
-        functions.extend(field_accum.field_getter);
-        functions.extend(field_accum.offset_getter);
-
-        variant_accum.done_fields.push(DoneField {
-            name: ast_field.name.to_string(),
-            field_type: field_accum.field_type,
-            len: field_accum.len.clone(),
-            offset_getter_fn_name: field_accum.offset_getter_fn_name,
-        });
-
-        variant_accum.offset = variant_accum.offset.clone() + field_accum.len;
     }
 
     let variant_struct = quote! {
@@ -194,7 +171,6 @@ fn generate_variant_struct(
         }
 
         impl<'a> #struct_name<'a> {
-            #functions
         }
     };
 
@@ -202,10 +178,7 @@ fn generate_variant_struct(
 }
 
 fn generate_matchers(matchers: &[ast::UnionMatcher<'_>]) -> Result<TokenStream, Error> {
-    let patterns = matchers
-        .iter()
-        .map(generate_matcher)
-        .collect::<Vec<_>>();
+    let patterns = matchers.iter().map(generate_matcher).collect::<Vec<_>>();
 
     if patterns.len() != matchers.len()
         && !(matchers.len() == 1 && matches!(matchers[1], ast::UnionMatcher::Wildcard))
@@ -230,8 +203,7 @@ fn generate_matcher(matcher: &ast::UnionMatcher<'_>) -> TokenStream {
         }
         ast::UnionMatcher::Wildcard => quote! { _ },
         ast::UnionMatcher::Tuple(elements) => {
-            let element_patterns: Vec<_> =
-                elements.iter().map(generate_matcher).collect();
+            let element_patterns: Vec<_> = elements.iter().map(generate_matcher).collect();
             quote! { (#(#element_patterns),*) }
         }
     }

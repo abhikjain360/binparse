@@ -1,17 +1,20 @@
+use std::collections::HashMap;
+
 use quote::{format_ident, quote};
 
 use crate::{
     GeneratedLen,
-    struct_::DoneFieldType,
-    type_::{Error, GeneratedTypeInfo, TypeAccum},
+    field::FieldAccum,
+    struct_::{DoneFieldType, GeneratedStruct},
+    type_::{Error, GeneratedTypeInfo},
 };
 
 pub(crate) fn generate(
     struct_name: &str,
-    accum: &mut TypeAccum<'_>,
+    done: &HashMap<&str, GeneratedStruct>,
+    _accum: &mut FieldAccum,
     start_offset: GeneratedLen,
 ) -> Result<GeneratedTypeInfo, Error> {
-    let done = accum.field_accum.struct_accum.done;
     let generated_struct = done
         .get(struct_name)
         .ok_or_else(|| Error::UnknownType(struct_name.to_string()))?;
