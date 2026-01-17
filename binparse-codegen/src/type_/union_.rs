@@ -5,6 +5,7 @@ use quote::{format_ident, quote};
 
 use crate::{
     GeneratedLen,
+    attr::Endian,
     field::{self, FieldAccum},
     struct_::{DoneFieldType, GeneratedStruct, StructAccum},
     type_::{self, GeneratedTypeInfo},
@@ -28,6 +29,7 @@ pub(crate) fn generate(
     struct_accum: &mut StructAccum,
     accum: &mut FieldAccum,
     start_offset: GeneratedLen,
+    endian: Endian,
 ) -> Result<GeneratedTypeInfo, type_::Error> {
     let num_args = union.args.len();
     if num_args == 0 {
@@ -86,14 +88,17 @@ pub(crate) fn generate(
     let mut len_match_arms = TokenStream::new();
 
     for variant in &union.variants {
-        let ast::UnionBody::NamedInline(variant_name, items) = &variant.body else {
+        let ast::UnionBody::NamedInline(inline_struct) = &variant.body else {
             todo!("@error union variants");
         };
 
-        let variant_ident = format_ident!("{}", variant_name);
-        let struct_name = format_ident!("{}_{}_{}", parent_struct_name, field_name, variant_name);
+        let variant_ident = format_ident!("{}", inline_struct.name);
+        let struct_name = format_ident!("{}_{}_{}", parent_struct_name, field_name, inline_struct.name);
 
-        let (variant_struct, variant_len) = generate_variant_struct(&struct_name, items, done)?;
+        let variant_attrs = crate::attr::ParsedAttrs::parse(&inline_struct.attributes)?;
+        let variant_endian = variant_attrs.merge_endian(endian);
+
+        let (variant_struct, variant_len) = generate_variant_struct(&struct_name, &inline_struct.items, done, variant_endian)?;
         variant_structs.extend(variant_struct);
 
         enum_variants.extend(quote! {
@@ -151,8 +156,9 @@ fn generate_variant_struct(
     struct_name: &syn::Ident,
     items: &[ast::StructItem<'_>],
     done: &HashMap<&str, GeneratedStruct>,
+    endian: Endian,
 ) -> Result<(TokenStream, GeneratedLen), type_::Error> {
-    let mut variant_accum = StructAccum::new(&struct_name.to_string());
+    let mut variant_accum = StructAccum::new(&struct_name.to_string(), endian);
 
     for item in items {
         let ast::StructItem::Field(ast_field) = item else {
@@ -163,6 +169,8 @@ fn generate_variant_struct(
             .map_err(|e| type_::Error::Field(Box::new(e)))?;
     }
 
+    let functions = variant_accum.functions;
+
     let variant_struct = quote! {
         #[allow(non_camel_case_types)]
         pub struct #struct_name<'a> {
@@ -171,6 +179,7 @@ fn generate_variant_struct(
         }
 
         impl<'a> #struct_name<'a> {
+            #functions
         }
     };
 

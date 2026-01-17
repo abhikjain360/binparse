@@ -5,7 +5,7 @@ use binparse_dsl as ast;
 use proc_macro2::TokenStream;
 use quote::{format_ident, quote};
 
-use crate::{GeneratedLen, field};
+use crate::{GeneratedLen, attr::{Endian, ParsedAttrs}, field};
 
 #[derive(Clone, Copy)]
 pub(crate) enum DoneFieldType {
@@ -23,6 +23,7 @@ pub(crate) struct DoneField {
 
 pub(crate) struct StructAccum {
     pub(crate) name: syn::Ident,
+    pub(crate) endian: Endian,
     pub(crate) offset: GeneratedLen,
     pub(crate) done_fields: Vec<DoneField>,
     pub(crate) other_entities: TokenStream,
@@ -46,12 +47,15 @@ pub enum Error {
     },
     #[error("'field {field}' needs byte-alignment, but previous fields didn't align")]
     Unaligned { field: String },
+    #[error(transparent)]
+    Attr(#[from] crate::attr::Error),
 }
 
 impl StructAccum {
-    pub(crate) fn new(name: &str) -> Self {
+    pub(crate) fn new(name: &str, endian: Endian) -> Self {
         Self {
             name: format_ident!("{}", name),
+            endian,
             offset: GeneratedLen::Fixed(Len { byte: 0, bit: 0 }),
             done_fields: vec![],
             other_entities: TokenStream::new(),
@@ -66,7 +70,9 @@ pub(crate) fn generate<'a>(
     ast: &'a ast::Struct<'a>,
     done: &mut HashMap<&'a str, GeneratedStruct>,
 ) -> Result<(), Error> {
-    let mut accum = StructAccum::new(ast.name);
+    let attrs = ParsedAttrs::parse(&ast.attributes)?;
+    let struct_endian = attrs.merge_endian(Endian::default());
+    let mut accum = StructAccum::new(ast.name, struct_endian);
 
     for item in &ast.items {
         if let ast::StructItem::Field(ast_field) = item {
@@ -81,6 +87,7 @@ pub(crate) fn generate<'a>(
 
     let StructAccum {
         name,
+        endian: _,
         offset,
         done_fields: _,
         other_entities,

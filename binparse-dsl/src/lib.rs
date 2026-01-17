@@ -119,10 +119,17 @@ pub struct UnionVariant<'a> {
 }
 
 #[derive(Debug, Clone, PartialEq)]
+pub struct NamedInlineStruct<'a> {
+    pub name: &'a str,
+    pub attributes: Vec<Attribute<'a>>,
+    pub items: Vec<StructItem<'a>>,
+}
+
+#[derive(Debug, Clone, PartialEq)]
 pub enum UnionBody<'a> {
     // spec: "Echo { ... }".
     // effectively defining a struct inline
-    NamedInline(&'a str, Vec<StructItem<'a>>),
+    NamedInline(NamedInlineStruct<'a>),
     // error variant: @error(ERROR_NAME { field: expr, ... })
     Error(&'a str, Vec<(&'a str, Expr<'a>)>),
 }

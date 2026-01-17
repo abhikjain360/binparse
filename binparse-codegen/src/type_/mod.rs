@@ -6,6 +6,7 @@ use proc_macro2::TokenStream;
 
 use crate::{
     GeneratedLen,
+    attr::Endian,
     field::FieldAccum,
     struct_::{DoneFieldType, GeneratedStruct, StructAccum},
 };
@@ -42,6 +43,8 @@ pub enum Error {
     Union(#[from] union_::Error),
     #[error("field error: {0}")]
     Field(Box<crate::field::Error>),
+    #[error(transparent)]
+    Attr(#[from] crate::attr::Error),
 }
 
 pub(crate) fn generate<'a>(
@@ -50,19 +53,20 @@ pub(crate) fn generate<'a>(
     struct_accum: &mut StructAccum,
     field_accum: &mut FieldAccum,
     start_offset: GeneratedLen,
+    endian: Endian,
 ) -> Result<GeneratedTypeInfo, Error> {
     match ast {
-        ast::Type::Primitive(p) => primitive::generate(*p, start_offset),
+        ast::Type::Primitive(p) => primitive::generate(*p, start_offset, endian),
         ast::Type::BitField(width) => bitfield::generate(*width as usize, start_offset),
         ast::Type::Concat(items) => {
-            concat::generate(items, done, struct_accum, field_accum, start_offset)
+            concat::generate(items, done, struct_accum, field_accum, start_offset, endian)
         }
         ast::Type::StructRef(struct_name) => {
             struct_ref::generate(struct_name, done, field_accum, start_offset)
         }
         ast::Type::Array(array_type) => {
-            array::generate(array_type, done, struct_accum, field_accum, start_offset)
+            array::generate(array_type, done, struct_accum, field_accum, start_offset, endian)
         }
-        ast::Type::Union(u) => union_::generate(u, done, struct_accum, field_accum, start_offset),
+        ast::Type::Union(u) => union_::generate(u, done, struct_accum, field_accum, start_offset, endian),
     }
 }

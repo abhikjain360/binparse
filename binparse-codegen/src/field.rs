@@ -6,6 +6,7 @@ use quote::{format_ident, quote};
 
 use crate::{
     GeneratedLen,
+    attr::{self, ParsedAttrs},
     struct_::{DoneField, DoneFieldType, GeneratedStruct, StructAccum},
     type_,
 };
@@ -27,6 +28,8 @@ pub enum Error {
     Type(#[from] type_::Error),
     #[error("cannot determine field offset: no start offset and no previous fields")]
     UnknownOffset,
+    #[error(transparent)]
+    Attr(#[from] attr::Error),
 }
 
 impl FieldAccum {
@@ -51,12 +54,26 @@ pub(crate) fn generate<'a>(
     done: &HashMap<&'a str, GeneratedStruct>,
     struct_accum: &mut StructAccum,
 ) -> Result<(), Error> {
+    let attrs = ParsedAttrs::parse(&ast.attributes)?;
+    let field_endian = attrs.merge_endian(struct_accum.endian);
     let mut field_accum = FieldAccum::new(ast.name);
 
     match &ast.value {
         ast::FieldValue::Type(ty) => {
+            if attrs.endian.is_some() {
+                match ty {
+                    ast::Type::Primitive(ast::Primitive::U8) => {
+                        return Err(attr::Error::EndianOnU8.into())
+                    }
+                    ast::Type::BitField(_) => return Err(attr::Error::EndianOnBitfield.into()),
+                    ast::Type::StructRef(_) => return Err(attr::Error::EndianOnStructRef.into()),
+                    _ => {}
+                }
+            }
+
             let start_offset = struct_accum.offset.clone();
-            let info = type_::generate(ty, done, struct_accum, &mut field_accum, start_offset)?;
+            let info =
+                type_::generate(ty, done, struct_accum, &mut field_accum, start_offset, field_endian)?;
 
             field_accum.len = info.len;
             field_accum.field_type = info.field_type;
@@ -105,6 +122,11 @@ pub(crate) fn generate<'a>(
     };
 
     struct_accum.offset = end_offset;
+    struct_accum.field_definitions.extend(field_accum.definitions);
+    struct_accum.functions.extend(field_accum.helper_fns);
+    struct_accum.functions.extend(field_accum.field_getter);
+    struct_accum.functions.extend(field_accum.offset_getter);
+    struct_accum.last_offset_getter_fn_name = Some(offset_getter_fn_name.clone());
     struct_accum.done_fields.push(DoneField {
         name: ast.name.to_string(),
         field_type,

@@ -3,6 +3,7 @@ use quote::quote;
 
 use crate::{
     GeneratedLen,
+    attr::Endian,
     struct_::DoneFieldType,
     type_::{Error, GeneratedTypeInfo},
 };
@@ -10,6 +11,7 @@ use crate::{
 pub(crate) fn generate(
     primitive: ast::Primitive,
     start_offset: GeneratedLen,
+    endian: Endian,
 ) -> Result<GeneratedTypeInfo, Error> {
     let (len, def) = crate::match_primitive(&primitive);
     let return_ty = def.clone();
@@ -20,12 +22,21 @@ pub(crate) fn generate(
                 return Err(Error::InvalidAlignment(offset));
             }
 
-            let end = offset + len;
             let start_byte = offset.byte;
-            let end_byte = end.byte;
 
-            let field_getter_body = quote! {
-                #def::from_ne_bytes(self.data[#start_byte..#end_byte].try_into().unwrap())
+            let field_getter_body = if matches!(primitive, ast::Primitive::U8) {
+                quote! { self.data[#start_byte] }
+            } else {
+                let end = offset + len;
+                let end_byte = end.byte;
+                match endian {
+                    Endian::Big => quote! {
+                        #def::from_be_bytes(self.data[#start_byte..#end_byte].try_into().unwrap())
+                    },
+                    Endian::Little => quote! {
+                        #def::from_le_bytes(self.data[#start_byte..#end_byte].try_into().unwrap())
+                    },
+                }
             };
 
             Ok(GeneratedTypeInfo {

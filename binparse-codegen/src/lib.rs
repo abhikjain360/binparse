@@ -10,6 +10,7 @@ use quote::quote;
 
 use struct_::*;
 
+mod attr;
 mod field;
 mod struct_;
 mod type_;
@@ -203,8 +204,8 @@ fn find_type_dependencies<'a>(ty: &ast::Type<'a>, dependencies: &mut HashSet<&'a
         }
         ast::Type::Union(union) => {
             for variant in &union.variants {
-                if let ast::UnionBody::NamedInline(_, items) = &variant.body {
-                    find_dependencies(items, dependencies);
+                if let ast::UnionBody::NamedInline(inline_struct) = &variant.body {
+                    find_dependencies(&inline_struct.items, dependencies);
                 }
             }
         }

@@ -6,6 +6,7 @@ use quote::{format_ident, quote};
 
 use crate::{
     GeneratedLen,
+    attr::Endian,
     field::FieldAccum,
     struct_::{DoneField, DoneFieldType, GeneratedStruct, StructAccum},
     type_::{self, GeneratedTypeInfo},
@@ -27,6 +28,7 @@ pub(crate) fn generate(
     struct_accum: &mut StructAccum,
     accum: &mut FieldAccum,
     start_offset: GeneratedLen,
+    endian: Endian,
 ) -> Result<GeneratedTypeInfo, type_::Error> {
     match start_offset {
         GeneratedLen::Fixed(start_offset_len) => {
@@ -68,10 +70,22 @@ pub(crate) fn generate(
                             count: #count,
                             data: &self.data[#offset..],
                         };
-                        let next_body = quote! {
-                            let value = #prim_ty::from_ne_bytes(self.data[..#byte_len].try_into().unwrap());
-                            self.data = &self.data[#byte_len..];
-                            Some(Ok(value))
+                        let next_body = if matches!(prim, ast::Primitive::U8) {
+                            quote! {
+                                let value = self.data[0];
+                                self.data = &self.data[1..];
+                                Some(Ok(value))
+                            }
+                        } else {
+                            let from_bytes = match endian {
+                                Endian::Big => quote! { from_be_bytes },
+                                Endian::Little => quote! { from_le_bytes },
+                            };
+                            quote! {
+                                let value = #prim_ty::#from_bytes(self.data[..#byte_len].try_into().unwrap());
+                                self.data = &self.data[#byte_len..];
+                                Some(Ok(value))
+                            }
                         };
                         (
                             GeneratedLen::Fixed(prim_len),

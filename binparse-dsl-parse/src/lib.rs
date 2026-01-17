@@ -540,11 +540,12 @@ fn error_body<'a>(input: &mut Input<'a>) -> ModalResult<ast::UnionBody<'a>> {
 fn union_body<'a>(input: &mut Input<'a>) -> ModalResult<ast::UnionBody<'a>> {
     alt((
         error_body,
-        seq! {
-            padded(identifier),
-            delimited(padded('{'), struct_items, padded('}'))
-        }
-        .map(|(n, items)| ast::UnionBody::NamedInline(n, items)),
+        seq! {ast::NamedInlineStruct {
+            attributes: attributes,
+            name: padded(identifier),
+            items: delimited(padded('{'), struct_items, padded('}')),
+        }}
+        .map(ast::UnionBody::NamedInline),
     ))
     .parse_next(input)
 }
