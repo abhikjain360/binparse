@@ -7,7 +7,6 @@
   - everywhere `use binparse_dsl as ast;`
 - run codegen test using cargo run -p binparse-codegen --example test
 - make sure to run cargo clippy --all-targets at the end
-- ignore syntax_spec.md and instructions.md - they are outdated. you may use them as guidelines not as a definitive source of the specification.
 - as this codebase is complex, do only one step at a time, only do what is asked for and no more and ask for clarifications if doing what is asked for is not enough according to your analysis.
   - in the same spirit prefer using match arms with todo!() for other cases
 - bitfield width is always less than 8
