@@ -1,5 +1,7 @@
 use std::ops::{Add, Mul};
 
+pub mod hooks;
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub struct Len {
     pub byte: usize,

@@ -10,13 +10,13 @@ The goal is to provide **guarantees AI cannot**, **automation AI cannot maintain
 
 ### Hooks (Rust Integration)
 
-- [ ] `@hook(fn_name, ReturnTypePathWithAllRequiredGenerics)` attribute for custom parsing
-  - [ ] Hook returns `(value in correct type, bytes consumed)` tuple
-  - [ ] Hook has access to remaining slice
-  - [ ] Propagate dynamic length to subsequent fields
-- [ ] Built-in hooks library
-  - [ ] `cstring` - null-terminated string
-  - [ ] `leb128` - signed/unsigned LEB128
+- [x] `@hook(fn_name, ReturnTypePathWithAllRequiredGenerics)` attribute for custom parsing
+  - [x] Hook returns `(value in correct type, bytes consumed)` tuple
+  - [x] Hook has access to remaining slice
+  - [x] Propagate dynamic length to subsequent fields
+- [x] Built-in hooks library
+  - [x] `cstring` - null-terminated string
+  - [x] `leb128` - signed/unsigned LEB128
 
 ### Array Improvements
 
