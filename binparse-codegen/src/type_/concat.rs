@@ -28,22 +28,22 @@ pub(crate) fn generate<'a>(
     field_accum: &mut FieldAccum,
     start_offset: GeneratedLen,
     inherited: Inherited,
+    errors: &[ast::ErrorVariant<'_>],
 ) -> Result<GeneratedTypeInfo, type_::Error> {
     let mut total_len = GeneratedLen::Fixed(Len::default());
     let mut field_types = Vec::new();
     let mut field_exprs = TokenStream::new();
 
     let mut current_offset = start_offset;
+    let parent_field_name = field_accum.field_name.clone();
 
     for (i, item) in items.iter().enumerate() {
-        let item_name = {
-            let field_name = &field_accum.field_name;
-            format_ident!("{}_{}", field_name, i)
-        };
+        let item_name = format_ident!("{}_{}", parent_field_name, i);
 
         let item_attrs = ParsedAttrs::parse(&item.attributes)?;
         let item_inherited = item_attrs.merge_inherited(inherited);
 
+        field_accum.field_name = item_name.clone();
         let info = type_::generate(
             &item.ty,
             done,
@@ -52,7 +52,10 @@ pub(crate) fn generate<'a>(
             current_offset.clone(),
             item_inherited,
             &item_attrs,
-        )?;
+            errors,
+        );
+        field_accum.field_name = parent_field_name.clone();
+        let info = info?;
 
         let return_ty = info.return_ty;
         let field_getter_body = info.field_getter_body;

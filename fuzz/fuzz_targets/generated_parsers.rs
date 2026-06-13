@@ -33,10 +33,11 @@ fuzz_target!(|data: &[u8]| {
         let _ = packet.payload_bit_range();
         let _ = packet.pair();
         match packet.payload() {
-            Baseline_payload::One(one) => {
+            Ok(Baseline_payload::One(one)) => {
                 let _ = one.x();
             }
-            Baseline_payload::Unknown(_) => {}
+            Ok(Baseline_payload::Unknown(_)) => {}
+            Err(_) => {}
         }
     }
 
@@ -141,6 +142,42 @@ fuzz_target!(|data: &[u8]| {
         let _ = packet.tail_bit_range();
         if let Ok(items) = packet.data() {
             let _ = items.collect::<binparse::ParseResult<Vec<_>>>();
+        }
+    }
+
+    if let Ok((packet, _)) = Dispatch::parse(data) {
+        let _ = packet.kind();
+        let _ = packet.body_bit_range();
+        match packet.body() {
+            Ok(Dispatch_body::Msg(msg)) => {
+                let _ = msg.msg_len();
+                if let Ok(bytes) = msg.data() {
+                    let _ = bytes.collect::<binparse::ParseResult<Vec<_>>>();
+                }
+            }
+            Ok(Dispatch_body::Checked(checked)) => {
+                let _ = checked.version();
+            }
+            Err(Error::UNKNOWN_KIND { kind }) => {
+                let _ = kind;
+            }
+            Err(Error::Parse(_)) => {}
+        }
+    }
+
+    if let Ok((packet, _)) = ConcatUnion::parse(data) {
+        let _ = packet.tail();
+        let _ = packet.pair_bit_range();
+        let (first, second, third) = packet.pair();
+        let _ = first;
+        if let Ok(ConcatUnion_pair_1::Word(word)) = second {
+            let _ = word.w();
+        }
+        if let Ok(ConcatUnion_pair_2::Bytes(bytes)) = third {
+            let _ = bytes.count();
+            if let Ok(items) = bytes.data() {
+                let _ = items.collect::<binparse::ParseResult<Vec<_>>>();
+            }
         }
     }
 });

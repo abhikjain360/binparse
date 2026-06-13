@@ -37,6 +37,7 @@ pub(crate) struct StructAccum {
 pub(crate) struct GeneratedStruct {
     pub(crate) len: GeneratedLen,
     pub(crate) tokens: TokenStream,
+    pub(crate) last_offset_getter: Option<syn::Ident>,
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -76,12 +77,35 @@ impl StructAccum {
 pub(crate) fn generate<'a>(
     ast: &'a ast::Struct<'a>,
     done: &mut HashMap<&'a str, GeneratedStruct>,
+    errors: &[ast::ErrorVariant<'_>],
 ) -> Result<(), Error> {
     let attrs = ParsedAttrs::parse(&ast.attributes)?;
     let struct_inherited = attrs.merge_inherited(Inherited::default());
-    let mut accum = StructAccum::new(ast.name, struct_inherited);
+    let generated = generate_struct(
+        ast.name,
+        &ast.items,
+        struct_inherited,
+        done,
+        errors,
+        TokenStream::new(),
+    )?;
 
-    generate_items(&ast.items, done, &mut accum)?;
+    done.insert(ast.name, generated);
+
+    Ok(())
+}
+
+pub(crate) fn generate_struct<'a>(
+    name: &str,
+    items: &[ast::StructItem<'a>],
+    inherited: Inherited,
+    done: &HashMap<&'a str, GeneratedStruct>,
+    errors: &[ast::ErrorVariant<'_>],
+    extra_attrs: TokenStream,
+) -> Result<GeneratedStruct, Error> {
+    let mut accum = StructAccum::new(name, inherited);
+
+    generate_items(items, done, &mut accum, errors)?;
 
     let StructAccum {
         name,
@@ -97,6 +121,7 @@ pub(crate) fn generate<'a>(
         conditional_count: _,
     } = accum;
 
+    let last_offset_getter = last_offset_getter_fn_name.clone();
     let parse_fn = if let Some(fn_name) = last_offset_getter_fn_name {
         quote! {
             pub fn parse(data: &'a [u8]) -> Result<(Self, &'a [u8]), binparse::ParseError> {
@@ -123,6 +148,7 @@ pub(crate) fn generate<'a>(
     let tokens = quote! {
         #other_entities
 
+        #extra_attrs
         pub struct #name<'a> {
             #[allow(dead_code)]
             data: &'a [u8],
@@ -136,32 +162,29 @@ pub(crate) fn generate<'a>(
         }
     };
 
-    done.insert(
-        ast.name,
-        GeneratedStruct {
-            len: offset,
-            tokens,
-        },
-    );
-
-    Ok(())
+    Ok(GeneratedStruct {
+        len: offset,
+        tokens,
+        last_offset_getter,
+    })
 }
 
 fn generate_items<'a>(
-    items: &'a [ast::StructItem<'a>],
+    items: &[ast::StructItem<'a>],
     done: &HashMap<&'a str, GeneratedStruct>,
     accum: &mut StructAccum,
+    errors: &[ast::ErrorVariant<'_>],
 ) -> Result<(), Error> {
     for item in items {
         match item {
             ast::StructItem::Field(ast_field) => {
-                field::generate(ast_field, done, accum).map_err(|error| Error::Field {
+                field::generate(ast_field, done, accum, errors).map_err(|error| Error::Field {
                     name: ast_field.name.to_string(),
                     error,
                 })?;
             }
             ast::StructItem::Conditional(conditional) => {
-                generate_conditional(conditional, done, accum)?;
+                generate_conditional(conditional, done, accum, errors)?;
             }
         }
     }
@@ -170,9 +193,10 @@ fn generate_items<'a>(
 }
 
 fn generate_conditional<'a>(
-    conditional: &'a ast::Conditional<'a>,
+    conditional: &ast::Conditional<'a>,
     done: &HashMap<&'a str, GeneratedStruct>,
     accum: &mut StructAccum,
+    errors: &[ast::ErrorVariant<'_>],
 ) -> Result<(), Error> {
     let condition = expr::lower(
         &conditional.condition,
@@ -208,7 +232,7 @@ fn generate_conditional<'a>(
         }
     });
     accum.condition = Some(present_fn_name.clone());
-    generate_items(&conditional.then_branch, done, accum)?;
+    generate_items(&conditional.then_branch, done, accum, errors)?;
     let then_end_expr = match &accum.last_offset_getter_fn_name {
         Some(fn_name) => quote! { self.#fn_name() },
         None => quote! { binparse::Len::ZERO },
@@ -227,7 +251,7 @@ fn generate_conditional<'a>(
                 }
             });
             accum.condition = Some(absent_fn_name);
-            generate_items(else_branch, done, accum)?;
+            generate_items(else_branch, done, accum, errors)?;
             match &accum.last_offset_getter_fn_name {
                 Some(fn_name) => quote! { self.#fn_name() },
                 None => quote! { binparse::Len::ZERO },

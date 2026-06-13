@@ -22,6 +22,7 @@ pub(crate) struct FieldAccum {
     pub(crate) field_getter: TokenStream,
     pub(crate) offset_getter: TokenStream,
     pub(crate) parse_checks: TokenStream,
+    pub(crate) pre_length_checks: TokenStream,
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -56,6 +57,7 @@ impl FieldAccum {
             field_getter: TokenStream::new(),
             offset_getter: TokenStream::new(),
             parse_checks: TokenStream::new(),
+            pre_length_checks: TokenStream::new(),
         }
     }
 }
@@ -64,6 +66,7 @@ pub(crate) fn generate<'a>(
     ast: &ast::Field<'a>,
     done: &HashMap<&'a str, GeneratedStruct>,
     struct_accum: &mut StructAccum,
+    errors: &[ast::ErrorVariant<'_>],
 ) -> Result<(), Error> {
     let attrs = ParsedAttrs::parse(&ast.attributes)?;
     let field_inherited = attrs.merge_inherited(struct_accum.inherited);
@@ -124,6 +127,7 @@ pub(crate) fn generate<'a>(
                         &mut field_accum,
                         field_inherited,
                         &attrs,
+                        errors,
                     )?;
                 }
                 (None, _) => {
@@ -134,6 +138,7 @@ pub(crate) fn generate<'a>(
                         &mut field_accum,
                         field_inherited,
                         &attrs,
+                        errors,
                     )?;
                 }
             }
@@ -158,6 +163,7 @@ pub(crate) fn generate<'a>(
                 &mut field_accum,
                 field_inherited,
                 &attrs,
+                errors,
             )?;
             constant = Some(lit.value);
         }
@@ -245,6 +251,7 @@ pub(crate) fn generate<'a>(
             }
         });
     }
+    length_check.extend(std::mem::take(&mut field_accum.pre_length_checks));
     length_check.extend(quote! {
         {
             let len = me.#offset_getter_fn_name();
@@ -374,6 +381,7 @@ fn generate_plain<'a>(
     field_accum: &mut FieldAccum,
     inherited: attr::Inherited,
     attrs: &ParsedAttrs<'a>,
+    errors: &[ast::ErrorVariant<'_>],
 ) -> Result<(), Error> {
     let start_offset = struct_accum.offset.clone();
     let info = type_::generate(
@@ -384,6 +392,7 @@ fn generate_plain<'a>(
         start_offset,
         inherited,
         attrs,
+        errors,
     )?;
 
     field_accum.len = info.len;
@@ -573,6 +582,7 @@ fn generate_vla_hook(
     Ok(())
 }
 
+#[allow(clippy::too_many_arguments)]
 fn generate_fixed_hook<'a>(
     hook: &Hook,
     ty: &ast::Type<'a>,
@@ -581,6 +591,7 @@ fn generate_fixed_hook<'a>(
     field_accum: &mut FieldAccum,
     inherited: attr::Inherited,
     attrs: &ParsedAttrs<'a>,
+    errors: &[ast::ErrorVariant<'_>],
 ) -> Result<(), Error> {
     let start_offset = struct_accum.offset.clone();
     let info = type_::generate(
@@ -591,6 +602,7 @@ fn generate_fixed_hook<'a>(
         start_offset,
         inherited,
         attrs,
+        errors,
     )?;
 
     field_accum.len = info.len;

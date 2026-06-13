@@ -108,7 +108,7 @@ mod tests {{
         assert_eq!(dyns, vec![0x5678]);
         assert_eq!(packet.pair(), (0x55, 0xabcd));
 
-        match packet.payload() {{
+        match packet.payload().unwrap() {{
             Baseline_payload::One(one) => assert_eq!(one.x(), 0xfe),
             Baseline_payload::Unknown(_) => panic!("expected One payload"),
         }}
@@ -824,6 +824,151 @@ mod tests {{
             let _ = LsbFlags::parse(data);
         }});
     }}
+
+    #[test]
+    fn icmp_tuple_dispatch_decodes() {{
+        let echo = [8, 0, 0x12, 0x34, 0x00, 0x01];
+        let (packet, rem) = Icmp::parse(&echo).unwrap();
+        assert!(rem.is_empty());
+        match packet.body().unwrap() {{
+            Icmp_body::Echo(echo) => {{
+                assert_eq!(echo.id(), 0x1234);
+                assert_eq!(echo.seq(), 1);
+            }}
+            _ => panic!("expected Echo body"),
+        }}
+
+        let unreach = [3, 1, 0xde, 0xad, 0xbe, 0xef];
+        let (packet, _) = Icmp::parse(&unreach).unwrap();
+        match packet.body().unwrap() {{
+            Icmp_body::DestUnreach(unreach) => assert_eq!(unreach.unused(), 0xdead_beef),
+            _ => panic!("expected DestUnreach body"),
+        }}
+        assert_eq!(packet.body_bit_range(), 16..48);
+
+        let raw = [42, 7, 0xff];
+        let (packet, rem) = Icmp::parse(&raw).unwrap();
+        assert_eq!(rem, &[0xff]);
+        match packet.body().unwrap() {{
+            Icmp_body::Raw(_) => {{}}
+            _ => panic!("expected Raw body"),
+        }}
+
+        assert_parse_no_panic("Icmp", &echo, |data| {{
+            let _ = Icmp::parse(data);
+        }});
+    }}
+
+    #[test]
+    fn union_dynamic_variant_decodes() {{
+        let data = [1, 3, 0xaa, 0xbb, 0xcc, 0x99];
+        let (packet, rem) = Dispatch::parse(&data).unwrap();
+        assert_eq!(rem, &[0x99]);
+        match packet.body().unwrap() {{
+            Dispatch_body::Msg(msg) => {{
+                assert_eq!(msg.len(), 3);
+                let bytes = msg
+                    .data()
+                    .unwrap()
+                    .collect::<binparse::ParseResult<Vec<_>>>()
+                    .unwrap();
+                assert_eq!(bytes, vec![0xaa, 0xbb, 0xcc]);
+            }}
+            _ => panic!("expected Msg body"),
+        }}
+        assert_eq!(packet.body_bit_range(), 8..40);
+    }}
+
+    #[test]
+    fn union_dynamic_variant_truncation_errors_instead_of_panicking() {{
+        let data = [1, 3, 0xaa];
+        assert_eq!(
+            Dispatch::parse(&data).map(|_| ()).unwrap_err(),
+            binparse::ParseError::NotEnoughData {{ expected: 4, got: 2 }}
+        );
+        assert_parse_no_panic("Dispatch", &[1, 3, 0xaa, 0xbb, 0xcc, 0x99], |data| {{
+            let _ = Dispatch::parse(data);
+        }});
+    }}
+
+    #[test]
+    fn union_variant_validation_runs_at_parse() {{
+        let bad = [2, 5];
+        assert_eq!(
+            Dispatch::parse(&bad).map(|_| ()).unwrap_err(),
+            binparse::ParseError::ValidationFailed {{
+                field: "Dispatch_body_Checked.version",
+                actual: 5,
+            }}
+        );
+
+        let good = [2, 4];
+        let (packet, rem) = Dispatch::parse(&good).unwrap();
+        assert!(rem.is_empty());
+        match packet.body().unwrap() {{
+            Dispatch_body::Checked(checked) => assert_eq!(checked.version(), 4),
+            _ => panic!("expected Checked body"),
+        }}
+    }}
+
+    #[test]
+    fn union_error_variant_surfaces_declared_error() {{
+        let data = [9, 0xaa];
+        let (packet, rem) = Dispatch::parse(&data).unwrap();
+        assert_eq!(rem, &[0xaa]);
+        assert_eq!(packet.body_bit_range(), 8..8);
+        match packet.body() {{
+            Err(Error::UNKNOWN_KIND {{ kind }}) => assert_eq!(kind, 9),
+            _ => panic!("expected UNKNOWN_KIND error"),
+        }}
+        assert_parse_no_panic("Dispatch", &data, |data| {{
+            let _ = Dispatch::parse(data);
+        }});
+    }}
+
+    #[test]
+    fn unions_in_concat_decode_independently() {{
+        let data = [1, 2, 0x42, 0x12, 0x34, 2, 0xaa, 0xbb, 0x99];
+        let (packet, rem) = ConcatUnion::parse(&data).unwrap();
+        assert!(rem.is_empty());
+        let (first, second, third) = packet.pair();
+        assert_eq!(first, 0x42);
+        match second.unwrap() {{
+            ConcatUnion_pair_1::Word(word) => assert_eq!(word.w(), 0x1234),
+            _ => panic!("expected Word"),
+        }}
+        match third.unwrap() {{
+            ConcatUnion_pair_2::Bytes(bytes) => {{
+                assert_eq!(bytes.n(), 2);
+                let collected = bytes
+                    .data()
+                    .unwrap()
+                    .collect::<binparse::ParseResult<Vec<_>>>()
+                    .unwrap();
+                assert_eq!(collected, vec![0xaa, 0xbb]);
+            }}
+            _ => panic!("expected Bytes"),
+        }}
+        assert_eq!(packet.tail(), 0x99);
+        assert_eq!(packet.pair_bit_range(), 16..64);
+
+        let empty = [0, 0, 0x42, 0x99];
+        let (packet, rem) = ConcatUnion::parse(&empty).unwrap();
+        assert!(rem.is_empty());
+        match packet.pair().1.unwrap() {{
+            ConcatUnion_pair_1::Empty(_) => {{}}
+            _ => panic!("expected Empty"),
+        }}
+        assert_eq!(packet.tail(), 0x99);
+
+        assert_eq!(
+            ConcatUnion::parse(&data[..7]).map(|_| ()).unwrap_err(),
+            binparse::ParseError::NotEnoughData {{ expected: 3, got: 2 }}
+        );
+        assert_parse_no_panic("ConcatUnion", &data, |data| {{
+            let _ = ConcatUnion::parse(data);
+        }});
+    }}
 }}
 "#
         ),
@@ -1021,6 +1166,40 @@ struct SkipReserved {
     @skip skipped_len: u8,
     payload: [u8; skipped_len],
     pair: concat(b<4>, @skip b<4>),
+}
+
+error {
+    UNKNOWN_KIND { kind: u8 },
+}
+
+struct Icmp {
+    icmp_type: u8,
+    code: u8,
+    body: union(icmp_type, code) {
+        (0, 0) | (8, 0) => Echo { id: u16, seq: u16 },
+        (3, _) => DestUnreach { unused: u32 },
+        (_, _) => Raw { },
+    },
+}
+
+struct Dispatch {
+    kind: u8,
+    body: union(kind) {
+        1 => Msg { len: u8, data: [u8; len] },
+        2 => Checked { version = 4 },
+        _ => @error(UNKNOWN_KIND { kind: kind }),
+    },
+}
+
+struct ConcatUnion {
+    a: u8,
+    b: u8,
+    pair: concat(
+        u8,
+        union(a) { 1 => Word { w: u16 }, _ => Empty { } },
+        union(b) { 2 => Bytes { n: u8, data: [u8; n] }, _ => Skip { } }
+    ),
+    tail: u8,
 }
 "#;
 

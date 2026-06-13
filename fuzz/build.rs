@@ -104,6 +104,30 @@ struct Padded {
     @pad(1) data: [u8; n],
     @pad_to(4) @align(2) tail: u16,
 }
+
+error {
+    UNKNOWN_KIND { kind: u8 },
+}
+
+struct Dispatch {
+    kind: u8,
+    body: union(kind) {
+        1 => Msg { msg_len: u8, data: [u8; msg_len] },
+        2 => Checked { version = 4 },
+        _ => @error(UNKNOWN_KIND { kind: kind }),
+    },
+}
+
+struct ConcatUnion {
+    a: u8,
+    b: u8,
+    pair: concat(
+        u8,
+        union(a) { 1 => Word { w: u16 }, _ => Empty { } },
+        union(b) { 2 => Bytes { count: u8, data: [u8; count] }, _ => Skip { } }
+    ),
+    tail: u8,
+}
 "#;
 
 fn main() {

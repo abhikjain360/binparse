@@ -6,7 +6,7 @@ use std::{
 use binparse::Len;
 use binparse_dsl as ast;
 use proc_macro2::TokenStream;
-use quote::quote;
+use quote::{format_ident, quote};
 
 use struct_::*;
 
@@ -80,6 +80,14 @@ impl Mul<usize> for GeneratedLen {
 pub enum Error {
     #[error("duplicate struct definition '{name}'")]
     DuplicateStruct { name: String },
+    #[error("duplicate error block")]
+    DuplicateErrorBlock,
+    #[error("duplicate error variant '{name}'")]
+    DuplicateErrorVariant { name: String },
+    #[error("struct name 'Error' conflicts with the generated error enum")]
+    ErrorStructConflict,
+    #[error("error variant 'Parse' is reserved for wrapped parse errors")]
+    ReservedErrorVariant,
     #[error("failed to generate struct '{name}': {source}")]
     GenerateStruct {
         name: String,
@@ -93,14 +101,15 @@ impl<'a> CodeGen<'a> {
         let mut reverse_deps = HashMap::<_, HashSet<_>>::new();
 
         let mut roots = Vec::new();
-        #[expect(unused)]
-        let mut error_enum = None;
+        let mut error_enum: Option<&[ast::ErrorVariant<'_>]> = None;
 
         for def in ast {
             let s = match def {
                 ast::Definition::Struct(s) => s,
-                #[expect(unused_assignments)]
                 ast::Definition::Error(variants) => {
+                    if error_enum.is_some() {
+                        return Err(Error::DuplicateErrorBlock);
+                    }
                     error_enum = Some(variants);
                     continue;
                 }
@@ -129,6 +138,12 @@ impl<'a> CodeGen<'a> {
             *dependants = actual;
         }
 
+        if error_enum.is_some() && structs.contains_key("Error") {
+            return Err(Error::ErrorStructConflict);
+        }
+        let errors = error_enum.unwrap_or(&[]);
+        let error_tokens = error_enum.map(generate_error_enum).transpose()?;
+
         let mut me = Self {
             todo: structs,
             done: HashMap::new(),
@@ -138,7 +153,7 @@ impl<'a> CodeGen<'a> {
             for root in roots.drain(..) {
                 let todo = me.todo.remove(root).expect("root not found in todo");
 
-                struct_::generate(todo.origin, &mut me.done).map_err(|source| {
+                struct_::generate(todo.origin, &mut me.done, errors).map_err(|source| {
                     Error::GenerateStruct {
                         name: root.to_string(),
                         source,
@@ -157,15 +172,51 @@ impl<'a> CodeGen<'a> {
             std::mem::swap(&mut next, &mut roots);
         }
 
-        me.print()
+        me.print(error_tokens.unwrap_or_default())
     }
 
-    fn print(self) -> Result<String, Error> {
-        let combined: TokenStream = self.done.into_values().map(|s| s.tokens).collect();
+    fn print(self, mut combined: TokenStream) -> Result<String, Error> {
+        combined.extend(self.done.into_values().map(|s| s.tokens));
         let file: syn::File = syn::parse2(combined.clone())
             .unwrap_or_else(|e| panic!("failed to parse generated tokens: {e}\n{combined}"));
         Ok(prettyplease::unparse(&file))
     }
+}
+
+fn generate_error_enum(variants: &[ast::ErrorVariant<'_>]) -> Result<TokenStream, Error> {
+    let mut seen = HashSet::new();
+    let mut enum_variants = TokenStream::new();
+
+    for variant in variants {
+        if variant.name == "Parse" {
+            return Err(Error::ReservedErrorVariant);
+        }
+        if !seen.insert(variant.name) {
+            return Err(Error::DuplicateErrorVariant {
+                name: variant.name.to_string(),
+            });
+        }
+        let name = format_ident!("{}", variant.name);
+        if variant.fields.is_empty() {
+            enum_variants.extend(quote! { #name, });
+        } else {
+            let fields = variant.fields.iter().map(|(field_name, primitive)| {
+                let field_ident = format_ident!("{}", field_name);
+                let ty = match_primitive(primitive).1;
+                quote! { #field_ident: #ty }
+            });
+            enum_variants.extend(quote! { #name { #(#fields),* }, });
+        }
+    }
+
+    Ok(quote! {
+        #[allow(non_camel_case_types)]
+        #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+        pub enum Error {
+            Parse(::binparse::ParseError),
+            #enum_variants
+        }
+    })
 }
 
 fn find_dependencies<'a>(

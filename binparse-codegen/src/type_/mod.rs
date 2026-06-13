@@ -51,6 +51,7 @@ pub enum Error {
     Attr(#[from] crate::attr::Error),
 }
 
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn generate<'a>(
     ast: &ast::Type<'a>,
     done: &HashMap<&'a str, GeneratedStruct>,
@@ -59,12 +60,13 @@ pub(crate) fn generate<'a>(
     start_offset: GeneratedLen,
     inherited: Inherited,
     attrs: &ParsedAttrs<'a>,
+    errors: &[ast::ErrorVariant<'_>],
 ) -> Result<GeneratedTypeInfo, Error> {
     match ast {
         ast::Type::Primitive(p) => primitive::generate(*p, start_offset, inherited.endian),
         ast::Type::BitField(width) => bitfield::generate(*width as usize, start_offset, inherited.bit_order),
         ast::Type::Concat(items) => {
-            concat::generate(items, done, struct_accum, field_accum, start_offset, inherited)
+            concat::generate(items, done, struct_accum, field_accum, start_offset, inherited, errors)
         }
         ast::Type::StructRef(struct_name) => {
             struct_ref::generate(struct_name, done, field_accum, start_offset)
@@ -72,6 +74,6 @@ pub(crate) fn generate<'a>(
         ast::Type::Array(array_type) => {
             array::generate(array_type, attrs, done, struct_accum, field_accum, start_offset, inherited)
         }
-        ast::Type::Union(u) => union_::generate(u, done, struct_accum, field_accum, start_offset, inherited),
+        ast::Type::Union(u) => union_::generate(u, done, struct_accum, field_accum, start_offset, inherited, errors),
     }
 }

@@ -1379,6 +1379,30 @@ fn golden_union_single_discriminant() {
             data: &'a [u8],
         }
         impl<'a> Packet_payload_Echo<'a> {
+            pub fn parse(data: &'a [u8]) -> Result<(Self, &'a [u8]), binparse::ParseError> {
+                let me = Self { data };
+                {
+                    let len = me.id_end_offset();
+                    let expected = len.byte_ceil();
+                    if data.len() < expected {
+                        return Err(binparse::ParseError::NotEnoughData {
+                            expected,
+                            got: data.len(),
+                        });
+                    }
+                }
+                let len = me.id_end_offset();
+                if len.bit != 0 {
+                    return Err(binparse::ParseError::UnalignedLength(len));
+                }
+                if data.len() < len.byte {
+                    return Err(binparse::ParseError::NotEnoughData {
+                        expected: len.byte,
+                        got: data.len(),
+                    });
+                }
+                Ok((me, &data[len.byte..]))
+            }
             #[allow(clippy::identity_op)]
             pub fn id(&self) -> u16 {
                 u16::from_be_bytes(self.data[0usize..2usize].try_into().unwrap())
@@ -1401,7 +1425,11 @@ fn golden_union_single_discriminant() {
             #[allow(dead_code)]
             data: &'a [u8],
         }
-        impl<'a> Packet_payload_Unknown<'a> {}
+        impl<'a> Packet_payload_Unknown<'a> {
+            pub fn parse(data: &'a [u8]) -> Result<(Self, &'a [u8]), binparse::ParseError> {
+                Ok((Self { data }, data))
+            }
+        }
         #[allow(non_camel_case_types)]
         pub enum Packet_payload<'a> {
             Echo(Packet_payload_Echo<'a>),
@@ -1424,6 +1452,7 @@ fn golden_union_single_discriminant() {
                         });
                     }
                 }
+                me.payload_union_check()?;
                 {
                     let len = me.payload_end_offset();
                     let expected = len.byte_ceil();
@@ -1462,18 +1491,29 @@ fn golden_union_single_discriminant() {
             pub fn ty_bit_range(&self) -> ::core::ops::Range<usize> {
                 self.ty_start_offset().bits()..self.ty_end_offset().bits()
             }
-            #[allow(clippy::identity_op)]
-            pub fn payload(&self) -> Packet_payload<'_> {
+            fn payload_union_check(&self) -> Result<(), binparse::ParseError> {
                 match self.ty() as usize {
                     1 => {
-                        Packet_payload::Echo(Packet_payload_Echo {
-                            data: &self.data[1usize..],
-                        })
+                        Packet_payload_Echo::parse(&self.data[(1usize).min(self.data.len())..])?;
                     }
                     _ => {
-                        Packet_payload::Unknown(Packet_payload_Unknown {
-                            data: &self.data[1usize..],
-                        })
+                        Packet_payload_Unknown::parse(
+                            &self.data[(1usize).min(self.data.len())..],
+                        )?;
+                    }
+                }
+                Ok(())
+            }
+            #[allow(clippy::identity_op)]
+            pub fn payload(&self) -> ::binparse::ParseResult<Packet_payload<'_>> {
+                match self.ty() as usize {
+                    1 => {
+                        Packet_payload_Echo::parse(&self.data[1usize..])
+                            .map(|(value, _)| Packet_payload::Echo(value))
+                    }
+                    _ => {
+                        Packet_payload_Unknown::parse(&self.data[1usize..])
+                            .map(|(value, _)| Packet_payload::Unknown(value))
                     }
                 }
             }
@@ -1487,13 +1527,13 @@ fn golden_union_single_discriminant() {
                             1 => {
                                 ::binparse::Len {
                                     byte: 2usize,
-                                    bit: 0,
+                                    bit: 0usize,
                                 }
                             }
                             _ => {
                                 ::binparse::Len {
                                     byte: 0usize,
-                                    bit: 0,
+                                    bit: 0usize,
                                 }
                             }
                         }
@@ -1528,6 +1568,30 @@ fn golden_union_tuple_discriminant_with_multiple_matchers() {
             data: &'a [u8],
         }
         impl<'a> Packet_payload_Echo<'a> {
+            pub fn parse(data: &'a [u8]) -> Result<(Self, &'a [u8]), binparse::ParseError> {
+                let me = Self { data };
+                {
+                    let len = me.id_end_offset();
+                    let expected = len.byte_ceil();
+                    if data.len() < expected {
+                        return Err(binparse::ParseError::NotEnoughData {
+                            expected,
+                            got: data.len(),
+                        });
+                    }
+                }
+                let len = me.id_end_offset();
+                if len.bit != 0 {
+                    return Err(binparse::ParseError::UnalignedLength(len));
+                }
+                if data.len() < len.byte {
+                    return Err(binparse::ParseError::NotEnoughData {
+                        expected: len.byte,
+                        got: data.len(),
+                    });
+                }
+                Ok((me, &data[len.byte..]))
+            }
             #[allow(clippy::identity_op)]
             pub fn id(&self) -> u16 {
                 u16::from_be_bytes(self.data[0usize..2usize].try_into().unwrap())
@@ -1550,7 +1614,11 @@ fn golden_union_tuple_discriminant_with_multiple_matchers() {
             #[allow(dead_code)]
             data: &'a [u8],
         }
-        impl<'a> Packet_payload_Unknown<'a> {}
+        impl<'a> Packet_payload_Unknown<'a> {
+            pub fn parse(data: &'a [u8]) -> Result<(Self, &'a [u8]), binparse::ParseError> {
+                Ok((Self { data }, data))
+            }
+        }
         #[allow(non_camel_case_types)]
         pub enum Packet_payload<'a> {
             Echo(Packet_payload_Echo<'a>),
@@ -1583,6 +1651,7 @@ fn golden_union_tuple_discriminant_with_multiple_matchers() {
                         });
                     }
                 }
+                me.payload_union_check()?;
                 {
                     let len = me.payload_end_offset();
                     let expected = len.byte_ceil();
@@ -1637,18 +1706,29 @@ fn golden_union_tuple_discriminant_with_multiple_matchers() {
             pub fn code_bit_range(&self) -> ::core::ops::Range<usize> {
                 self.code_start_offset().bits()..self.code_end_offset().bits()
             }
-            #[allow(clippy::identity_op)]
-            pub fn payload(&self) -> Packet_payload<'_> {
+            fn payload_union_check(&self) -> Result<(), binparse::ParseError> {
                 match (self.ty() as usize, self.code() as usize) {
                     (0, 0) | (0, 8) => {
-                        Packet_payload::Echo(Packet_payload_Echo {
-                            data: &self.data[2usize..],
-                        })
+                        Packet_payload_Echo::parse(&self.data[(2usize).min(self.data.len())..])?;
                     }
                     _ => {
-                        Packet_payload::Unknown(Packet_payload_Unknown {
-                            data: &self.data[2usize..],
-                        })
+                        Packet_payload_Unknown::parse(
+                            &self.data[(2usize).min(self.data.len())..],
+                        )?;
+                    }
+                }
+                Ok(())
+            }
+            #[allow(clippy::identity_op)]
+            pub fn payload(&self) -> ::binparse::ParseResult<Packet_payload<'_>> {
+                match (self.ty() as usize, self.code() as usize) {
+                    (0, 0) | (0, 8) => {
+                        Packet_payload_Echo::parse(&self.data[2usize..])
+                            .map(|(value, _)| Packet_payload::Echo(value))
+                    }
+                    _ => {
+                        Packet_payload_Unknown::parse(&self.data[2usize..])
+                            .map(|(value, _)| Packet_payload::Unknown(value))
                     }
                 }
             }
@@ -1662,13 +1742,13 @@ fn golden_union_tuple_discriminant_with_multiple_matchers() {
                             (0, 0) | (0, 8) => {
                                 ::binparse::Len {
                                     byte: 2usize,
-                                    bit: 0,
+                                    bit: 0usize,
                                 }
                             }
                             _ => {
                                 ::binparse::Len {
                                     byte: 0usize,
-                                    bit: 0,
+                                    bit: 0usize,
                                 }
                             }
                         }
@@ -1676,6 +1756,186 @@ fn golden_union_tuple_discriminant_with_multiple_matchers() {
             }
             pub fn payload_start_offset(&self) -> binparse::Len {
                 self.code_end_offset()
+            }
+            pub fn payload_bit_range(&self) -> ::core::ops::Range<usize> {
+                self.payload_start_offset().bits()..self.payload_end_offset().bits()
+            }
+        }
+        "#,
+    );
+}
+
+#[test]
+fn golden_union_error_variant() {
+    assert_generated_eq(
+        r#"error {
+            UNKNOWN_TYPE { ty: u8 },
+        }
+
+        struct Packet {
+            ty: u8,
+            payload: union(ty) {
+                1 => Echo { id: u16 },
+                _ => @error(UNKNOWN_TYPE { ty: ty }),
+            },
+        }"#,
+        r#"
+        #[allow(non_camel_case_types)]
+        #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+        pub enum Error {
+            Parse(::binparse::ParseError),
+            UNKNOWN_TYPE { ty: u8 },
+        }
+        #[allow(non_camel_case_types)]
+        pub struct Packet_payload_Echo<'a> {
+            #[allow(dead_code)]
+            data: &'a [u8],
+        }
+        impl<'a> Packet_payload_Echo<'a> {
+            pub fn parse(data: &'a [u8]) -> Result<(Self, &'a [u8]), binparse::ParseError> {
+                let me = Self { data };
+                {
+                    let len = me.id_end_offset();
+                    let expected = len.byte_ceil();
+                    if data.len() < expected {
+                        return Err(binparse::ParseError::NotEnoughData {
+                            expected,
+                            got: data.len(),
+                        });
+                    }
+                }
+                let len = me.id_end_offset();
+                if len.bit != 0 {
+                    return Err(binparse::ParseError::UnalignedLength(len));
+                }
+                if data.len() < len.byte {
+                    return Err(binparse::ParseError::NotEnoughData {
+                        expected: len.byte,
+                        got: data.len(),
+                    });
+                }
+                Ok((me, &data[len.byte..]))
+            }
+            #[allow(clippy::identity_op)]
+            pub fn id(&self) -> u16 {
+                u16::from_be_bytes(self.data[0usize..2usize].try_into().unwrap())
+            }
+            pub fn id_end_offset(&self) -> binparse::Len {
+                binparse::Len {
+                    byte: 2usize,
+                    bit: 0usize,
+                }
+            }
+            pub fn id_start_offset(&self) -> binparse::Len {
+                binparse::Len::ZERO
+            }
+            pub fn id_bit_range(&self) -> ::core::ops::Range<usize> {
+                self.id_start_offset().bits()..self.id_end_offset().bits()
+            }
+        }
+        #[allow(non_camel_case_types)]
+        pub enum Packet_payload<'a> {
+            Echo(Packet_payload_Echo<'a>),
+        }
+        pub struct Packet<'a> {
+            #[allow(dead_code)]
+            data: &'a [u8],
+        }
+        impl<'a> Packet<'a> {
+            pub fn parse(data: &'a [u8]) -> Result<(Self, &'a [u8]), binparse::ParseError> {
+                let me = Self { data };
+                {
+                    let len = me.ty_end_offset();
+                    let expected = len.byte_ceil();
+                    if data.len() < expected {
+                        return Err(binparse::ParseError::NotEnoughData {
+                            expected,
+                            got: data.len(),
+                        });
+                    }
+                }
+                me.payload_union_check()?;
+                {
+                    let len = me.payload_end_offset();
+                    let expected = len.byte_ceil();
+                    if data.len() < expected {
+                        return Err(binparse::ParseError::NotEnoughData {
+                            expected,
+                            got: data.len(),
+                        });
+                    }
+                }
+                let len = me.payload_end_offset();
+                if len.bit != 0 {
+                    return Err(binparse::ParseError::UnalignedLength(len));
+                }
+                if data.len() < len.byte {
+                    return Err(binparse::ParseError::NotEnoughData {
+                        expected: len.byte,
+                        got: data.len(),
+                    });
+                }
+                Ok((me, &data[len.byte..]))
+            }
+            #[allow(clippy::identity_op)]
+            pub fn ty(&self) -> u8 {
+                self.data[0usize]
+            }
+            pub fn ty_end_offset(&self) -> binparse::Len {
+                binparse::Len {
+                    byte: 1usize,
+                    bit: 0usize,
+                }
+            }
+            pub fn ty_start_offset(&self) -> binparse::Len {
+                binparse::Len::ZERO
+            }
+            pub fn ty_bit_range(&self) -> ::core::ops::Range<usize> {
+                self.ty_start_offset().bits()..self.ty_end_offset().bits()
+            }
+            fn payload_union_check(&self) -> Result<(), binparse::ParseError> {
+                match self.ty() as usize {
+                    1 => {
+                        Packet_payload_Echo::parse(&self.data[(1usize).min(self.data.len())..])?;
+                    }
+                    _ => {}
+                }
+                Ok(())
+            }
+            #[allow(clippy::identity_op)]
+            pub fn payload(&self) -> Result<Packet_payload<'_>, Error> {
+                match self.ty() as usize {
+                    1 => {
+                        Packet_payload_Echo::parse(&self.data[1usize..])
+                            .map(|(value, _)| Packet_payload::Echo(value))
+                            .map_err(Error::Parse)
+                    }
+                    _ => {
+                        Err(Error::UNKNOWN_TYPE {
+                            ty: (self.ty() as usize) as u8,
+                        })
+                    }
+                }
+            }
+            pub fn payload_end_offset(&self) -> binparse::Len {
+                ::binparse::Len {
+                    byte: 1usize,
+                    bit: 0usize,
+                }
+                    + ({
+                        match self.ty() as usize {
+                            1 => {
+                                ::binparse::Len {
+                                    byte: 2usize,
+                                    bit: 0usize,
+                                }
+                            }
+                            _ => ::binparse::Len::ZERO,
+                        }
+                    })
+            }
+            pub fn payload_start_offset(&self) -> binparse::Len {
+                self.ty_end_offset()
             }
             pub fn payload_bit_range(&self) -> ::core::ops::Range<usize> {
                 self.payload_start_offset().bits()..self.payload_end_offset().bits()
@@ -2346,6 +2606,223 @@ fn union_non_numeric_argument_is_rejected() {
         err.to_string()
             .contains("expression 'inner' references field 'inner' which is not a numeric field")
     );
+}
+
+#[test]
+fn union_without_catch_all_is_rejected() {
+    let err = generate_err(
+        r#"struct Packet {
+            ty: u8,
+            payload: union(ty) {
+                1 => Echo { id: u16 },
+            },
+        }"#,
+    );
+    assert!(err.to_string().contains("union is not exhaustive"));
+}
+
+#[test]
+fn union_with_wildcard_error_variant_is_exhaustive() {
+    let code = generate(
+        r#"error {
+            UNKNOWN_TYPE,
+        }
+
+        struct Packet {
+            ty: u8,
+            payload: union(ty) {
+                1 => Echo { id: u16 },
+                _ => @error(UNKNOWN_TYPE),
+            },
+        }"#,
+    );
+    assert!(code.contains("Err(Error::UNKNOWN_TYPE)"));
+}
+
+#[test]
+fn union_tuple_of_wildcards_is_exhaustive() {
+    let code = generate(
+        r#"struct Packet {
+            ty: u8,
+            code: u8,
+            payload: union(ty, code) {
+                (1, 1) => Echo { id: u16 },
+                (_, _) => Unknown { },
+            },
+        }"#,
+    );
+    assert!(code.contains("(_, _) =>"));
+}
+
+#[test]
+fn union_matcher_arity_mismatch_is_rejected() {
+    let err = generate_err(
+        r#"struct Packet {
+            ty: u8,
+            payload: union(ty) {
+                (1, 2) => Echo { id: u16 },
+                _ => Unknown { },
+            },
+        }"#,
+    );
+    assert!(
+        err.to_string()
+            .contains("matcher has 2 elements but union has 1 arguments")
+    );
+}
+
+#[test]
+fn union_literal_matcher_on_tuple_union_is_rejected() {
+    let err = generate_err(
+        r#"struct Packet {
+            ty: u8,
+            code: u8,
+            payload: union(ty, code) {
+                1 => Echo { id: u16 },
+                _ => Unknown { },
+            },
+        }"#,
+    );
+    assert!(
+        err.to_string()
+            .contains("matcher has 1 elements but union has 2 arguments")
+    );
+}
+
+#[test]
+fn union_unknown_error_variant_is_rejected() {
+    let err = generate_err(
+        r#"struct Packet {
+            ty: u8,
+            payload: union(ty) {
+                1 => Echo { id: u16 },
+                _ => @error(UNKNOWN_TYPE),
+            },
+        }"#,
+    );
+    assert!(
+        err.to_string()
+            .contains("@error variant 'UNKNOWN_TYPE' is not declared in an error block")
+    );
+}
+
+#[test]
+fn union_error_variant_missing_field_is_rejected() {
+    let err = generate_err(
+        r#"error {
+            UNKNOWN_TYPE { ty: u8, code: u8 },
+        }
+
+        struct Packet {
+            ty: u8,
+            payload: union(ty) {
+                1 => Echo { id: u16 },
+                _ => @error(UNKNOWN_TYPE { ty: ty }),
+            },
+        }"#,
+    );
+    assert!(
+        err.to_string()
+            .contains("@error variant 'UNKNOWN_TYPE' is missing field 'code'")
+    );
+}
+
+#[test]
+fn union_error_variant_unknown_field_is_rejected() {
+    let err = generate_err(
+        r#"error {
+            UNKNOWN_TYPE { ty: u8 },
+        }
+
+        struct Packet {
+            ty: u8,
+            payload: union(ty) {
+                1 => Echo { id: u16 },
+                _ => @error(UNKNOWN_TYPE { ty: ty, extra: ty }),
+            },
+        }"#,
+    );
+    assert!(
+        err.to_string()
+            .contains("@error variant 'UNKNOWN_TYPE' has no declared field 'extra'")
+    );
+}
+
+#[test]
+fn unions_in_concat_get_distinct_names() {
+    let code = generate(
+        r#"struct Packet {
+            a: u8,
+            b: u8,
+            pair: concat(
+                union(a) { 1 => X { x: u8 }, _ => XOther { } },
+                union(b) { 2 => Y { y: u16 }, _ => YOther { } }
+            ),
+        }"#,
+    );
+    assert!(code.contains("pub enum Packet_pair_0<'a>"));
+    assert!(code.contains("pub enum Packet_pair_1<'a>"));
+    assert!(code.contains("me.pair_0_union_check()?;"));
+    assert!(code.contains("me.pair_1_union_check()?;"));
+}
+
+#[test]
+fn error_struct_name_conflict_is_rejected() {
+    let err = generate_err(
+        r#"error {
+            UNKNOWN_TYPE,
+        }
+
+        struct Error {
+            ty: u8,
+        }"#,
+    );
+    assert!(
+        err.to_string()
+            .contains("struct name 'Error' conflicts with the generated error enum")
+    );
+}
+
+#[test]
+fn error_struct_name_without_error_block_is_allowed() {
+    let code = generate("struct Error { ty: u8 }");
+    assert!(code.contains("pub struct Error<'a>"));
+}
+
+#[test]
+fn parse_error_variant_name_is_rejected() {
+    let err = generate_err("error { Parse }");
+    assert!(
+        err.to_string()
+            .contains("error variant 'Parse' is reserved for wrapped parse errors")
+    );
+}
+
+#[test]
+fn duplicate_error_block_is_rejected() {
+    let err = generate_err("error { A } error { B }");
+    assert!(err.to_string().contains("duplicate error block"));
+}
+
+#[test]
+fn duplicate_error_variant_is_rejected() {
+    let err = generate_err("error { A, A }");
+    assert!(err.to_string().contains("duplicate error variant 'A'"));
+}
+
+#[test]
+fn union_variant_validation_is_generated_in_variant_parse() {
+    let code = generate(
+        r#"struct Packet {
+            ty: u8,
+            payload: union(ty) {
+                1 => Echo { version = 4 },
+                _ => Unknown { },
+            },
+        }"#,
+    );
+    assert!(code.contains("fn version_validate"));
+    assert!(code.contains("me.version_validate()?;"));
 }
 
 #[test]
