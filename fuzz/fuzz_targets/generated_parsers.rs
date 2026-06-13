@@ -8,8 +8,54 @@ fn double_it(value: u16) -> u32 {
     u32::from(value) * 2
 }
 
-fn parse_cstring(data: &[u8]) -> (String, usize) {
-    binparse::hooks::cstring(data)
+fn parse_cstring(data: &[u8], ctx: binparse::HookContext<'_>) -> binparse::ParseResult<(String, usize)> {
+    binparse::hooks::cstring(data, ctx)
+}
+
+fn read_leb128(data: &[u8], ctx: binparse::HookContext<'_>) -> binparse::ParseResult<(u64, usize)> {
+    binparse::hooks::leb128_unsigned(data, ctx)
+}
+
+fn parse_dns_name(_data: &[u8], ctx: binparse::HookContext<'_>) -> binparse::ParseResult<(String, usize)> {
+    let msg = ctx.enclosing;
+    let mut labels: Vec<String> = Vec::new();
+    let mut pos = ctx.offset;
+    let mut consumed = None;
+    let mut jumps = 0;
+    loop {
+        let len_byte = *msg.get(pos).ok_or(binparse::ParseError::NotEnoughData {
+            expected: pos + 1,
+            got: msg.len(),
+        })?;
+        if len_byte & 0xC0 == 0xC0 {
+            let second = *msg.get(pos + 1).ok_or(binparse::ParseError::NotEnoughData {
+                expected: pos + 2,
+                got: msg.len(),
+            })?;
+            if consumed.is_none() {
+                consumed = Some(pos + 2 - ctx.offset);
+            }
+            jumps += 1;
+            if jumps > 8 {
+                return Err(binparse::ParseError::HookFailed {
+                    field: ctx.field,
+                    reason: "too many DNS compression jumps",
+                });
+            }
+            pos = (usize::from(len_byte & 0x3F) << 8) | usize::from(second);
+        } else if len_byte == 0 {
+            let consumed = consumed.unwrap_or_else(|| pos + 1 - ctx.offset);
+            return Ok((labels.join("."), consumed));
+        } else {
+            let end = pos + 1 + usize::from(len_byte);
+            let label = msg.get(pos + 1..end).ok_or(binparse::ParseError::NotEnoughData {
+                expected: end,
+                got: msg.len(),
+            })?;
+            labels.push(String::from_utf8_lossy(label).to_string());
+            pos = end;
+        }
+    }
 }
 
 fuzz_target!(|data: &[u8]| {
@@ -191,5 +237,22 @@ fuzz_target!(|data: &[u8]| {
         }
         let _ = packet.value_rest();
         let _ = packet.after();
+    }
+
+    if let Ok((packet, _)) = Varint::parse(data) {
+        let _ = packet.tag();
+        let _ = packet.value();
+        let _ = packet.value_bit_range();
+        let _ = packet.after();
+    }
+
+    if let Ok((packet, _)) = DnsMsg::parse(data) {
+        let _ = packet.id();
+        let _ = packet.qname();
+        let _ = packet.qtype();
+        let _ = packet.aname();
+        let _ = packet.atype();
+        let _ = packet.qname_bit_range();
+        let _ = packet.aname_bit_range();
     }
 });

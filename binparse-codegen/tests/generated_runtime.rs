@@ -53,8 +53,58 @@ fn double_it(value: u16) -> u32 {{
     u32::from(value) * 2
 }}
 
-fn parse_cstring(data: &[u8]) -> (String, usize) {{
-    binparse::hooks::cstring(data)
+fn parse_cstring(data: &[u8], ctx: binparse::HookContext<'_>) -> binparse::ParseResult<(String, usize)> {{
+    binparse::hooks::cstring(data, ctx)
+}}
+
+fn read_leb128(data: &[u8], ctx: binparse::HookContext<'_>) -> binparse::ParseResult<(u64, usize)> {{
+    binparse::hooks::leb128_unsigned(data, ctx)
+}}
+
+fn lying_hook(data: &[u8], _ctx: binparse::HookContext<'_>) -> binparse::ParseResult<(u8, usize)> {{
+    Ok((0, data.len() + 100))
+}}
+
+fn parse_dns_name(_data: &[u8], ctx: binparse::HookContext<'_>) -> binparse::ParseResult<(String, usize)> {{
+    let msg = ctx.enclosing;
+    let mut labels: Vec<String> = Vec::new();
+    let mut pos = ctx.offset;
+    let mut consumed = None;
+    let mut jumps = 0;
+    loop {{
+        let len_byte = *msg.get(pos).ok_or(binparse::ParseError::NotEnoughData {{
+            expected: pos + 1,
+            got: msg.len(),
+        }})?;
+        if len_byte & 0xC0 == 0xC0 {{
+            let second = *msg.get(pos + 1).ok_or(binparse::ParseError::NotEnoughData {{
+                expected: pos + 2,
+                got: msg.len(),
+            }})?;
+            if consumed.is_none() {{
+                consumed = Some(pos + 2 - ctx.offset);
+            }}
+            jumps += 1;
+            if jumps > 8 {{
+                return Err(binparse::ParseError::HookFailed {{
+                    field: ctx.field,
+                    reason: "too many DNS compression jumps",
+                }});
+            }}
+            pos = (usize::from(len_byte & 0x3F) << 8) | usize::from(second);
+        }} else if len_byte == 0 {{
+            let consumed = consumed.unwrap_or_else(|| pos + 1 - ctx.offset);
+            return Ok((labels.join("."), consumed));
+        }} else {{
+            let end = pos + 1 + usize::from(len_byte);
+            let label = msg.get(pos + 1..end).ok_or(binparse::ParseError::NotEnoughData {{
+                expected: end,
+                got: msg.len(),
+            }})?;
+            labels.push(String::from_utf8_lossy(label).to_string());
+            pos = end;
+        }}
+    }}
 }}
 
 {code}
@@ -224,11 +274,100 @@ mod tests {{
         assert!(rem.is_empty());
         assert_eq!(packet.prefix(), 3);
         assert_eq!(packet.value(), 4);
-        assert_eq!(packet.name(), "hi");
+        assert_eq!(packet.name().unwrap(), "hi");
         assert_eq!(packet.value_bit_range(), 8..24);
         assert_eq!(packet.name_bit_range(), 24..48);
+        assert!(matches!(
+            Hooked::parse(&[3, 0, 2, b'h', b'i']),
+            Err(binparse::ParseError::NotEnoughData {{ .. }})
+        ));
         assert_parse_no_panic("Hooked", &data, |data| {{
             let _ = Hooked::parse(data);
+        }});
+    }}
+
+    #[test]
+    fn leb128_hook_decodes_and_errors_propagate() {{
+        let data = [7, 0xE5, 0x8E, 0x26, 9];
+        let (packet, rem) = Varint::parse(&data).unwrap();
+        assert!(rem.is_empty());
+        assert_eq!(packet.tag(), 7);
+        assert_eq!(packet.value().unwrap(), 624485);
+        assert_eq!(packet.after(), 9);
+        assert_eq!(packet.value_bit_range(), 8..32);
+        assert_eq!(packet.after_bit_range(), 32..40);
+
+        assert!(matches!(
+            Varint::parse(&[7, 0xE5, 0x8E]),
+            Err(binparse::ParseError::NotEnoughData {{ .. }})
+        ));
+
+        let overlong = [7, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 9];
+        assert!(matches!(
+            Varint::parse(&overlong),
+            Err(binparse::ParseError::HookFailed {{
+                field: "Varint.value",
+                ..
+            }})
+        ));
+
+        assert_parse_no_panic("Varint", &data, |data| {{
+            let _ = Varint::parse(data);
+        }});
+    }}
+
+    #[test]
+    fn lying_hook_cannot_overrun_parent_slice() {{
+        let data = [1, 2, 3];
+        assert!(matches!(
+            Lying::parse(&data),
+            Err(binparse::ParseError::NotEnoughData {{ .. }})
+        ));
+        assert_parse_no_panic("Lying", &data, |data| {{
+            let _ = Lying::parse(data);
+        }});
+    }}
+
+    #[test]
+    fn dns_name_hook_resolves_compression_with_offsets() {{
+        let data = [
+            0xAB, 0xCD,
+            3, b'a', b'b', b'c', 2, b'd', b'e', 0,
+            0x00, 0x01,
+            0xC0, 0x02,
+            0x00, 0x1C,
+        ];
+        let (packet, rem) = DnsMsg::parse(&data).unwrap();
+        assert!(rem.is_empty());
+        assert_eq!(packet.id(), 0xABCD);
+        assert_eq!(packet.qname().unwrap(), "abc.de");
+        assert_eq!(packet.qtype(), 1);
+        assert_eq!(packet.aname().unwrap(), "abc.de");
+        assert_eq!(packet.atype(), 0x1C);
+        assert_eq!(packet.qname_bit_range(), 16..80);
+        assert_eq!(packet.aname_bit_range(), 96..112);
+        assert_eq!(packet.atype_bit_range(), 112..128);
+
+        let mut looping = data;
+        looping[12] = 0xC0;
+        looping[13] = 12;
+        assert!(matches!(
+            DnsMsg::parse(&looping),
+            Err(binparse::ParseError::HookFailed {{
+                field: "DnsMsg.aname",
+                ..
+            }})
+        ));
+
+        let mut dangling = data;
+        dangling[13] = 200;
+        assert!(matches!(
+            DnsMsg::parse(&dangling),
+            Err(binparse::ParseError::NotEnoughData {{ .. }})
+        ));
+
+        assert_parse_no_panic("DnsMsg", &data, |data| {{
+            let _ = DnsMsg::parse(data);
         }});
     }}
 
@@ -1260,6 +1399,24 @@ struct Bounded {
     len: u8,
     @len(len) value: Inner,
     after: u8,
+}
+
+struct Varint {
+    tag: u8,
+    @hook(read_leb128, u64) value: [u8],
+    after: u8,
+}
+
+struct Lying {
+    @hook(lying_hook, u8) v: [u8],
+}
+
+struct DnsMsg {
+    id: u16,
+    @hook(parse_dns_name, String) qname: [u8],
+    qtype: u16,
+    @hook(parse_dns_name, String) aname: [u8],
+    atype: u16,
 }
 "#;
 

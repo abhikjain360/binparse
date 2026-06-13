@@ -120,6 +120,15 @@ pub(crate) fn generate<'a>(
                     todo!("hooks inside conditionals");
                 }
                 (Some(hook), true) => {
+                    if !matches!(
+                        ty,
+                        ast::Type::Array(ast::ArrayType {
+                            elem_ty: ast::ArrayElemType::Primitive(ast::Primitive::U8),
+                            ..
+                        })
+                    ) {
+                        return Err(attr::Error::HookVlaNotU8.into());
+                    }
                     generate_vla_hook(hook, struct_accum, &mut field_accum, &attrs)?;
                 }
                 (Some(hook), false) => {
@@ -562,43 +571,64 @@ fn generate_vla_hook(
     let field_name = &field_accum.field_name;
     let hook_fn = &hook.fn_path;
     let return_ty = &hook.return_ty;
-
+    let field_path = format!("{}.{}", struct_accum.name, field_name);
     let raw_fn_name = format_ident!("{}_raw", field_name);
 
-    let start_offset = if attrs.pad.is_some() || attrs.pad_to.is_some() {
-        match &struct_accum.offset {
-            GeneratedLen::Fixed(len) => {
-                let byte = len.byte;
-                quote! { #byte }
+    let start = match &struct_accum.offset {
+        GeneratedLen::Fixed(len) => {
+            if len.bit != 0 {
+                return Err(type_::Error::InvalidAlignment(*len).into());
             }
-            GeneratedLen::Dynamic(tokens) => quote! { ({ #tokens }).byte },
+            let byte = len.byte;
+            quote! { #byte }
         }
-    } else {
-        match &struct_accum.last_offset_getter_fn_name {
-            Some(prev) => quote! { self.#prev().byte },
-            None => quote! { 0 },
-        }
+        GeneratedLen::Dynamic(tokens) => quote! {{
+            let len = #tokens;
+            if len.bit > 0 { return Err(::binparse::ParseError::UnalignedLength(len)) };
+            len.byte
+        }},
     };
 
     field_accum.helper_fns = quote! {
-        fn #raw_fn_name(&self) -> (#return_ty, usize) {
-            #hook_fn(&self.data[#start_offset..])
+        fn #raw_fn_name(&self) -> ::binparse::ParseResult<(#return_ty, usize)> {
+            let start = #start;
+            let (value, consumed) = #hook_fn(
+                &self.data[start..],
+                ::binparse::HookContext {
+                    field: #field_path,
+                    offset: start,
+                    enclosing: self.data,
+                },
+            )?;
+            let end = start.saturating_add(consumed);
+            if end > self.data.len() {
+                return Err(::binparse::ParseError::NotEnoughData {
+                    expected: end,
+                    got: self.data.len(),
+                });
+            }
+            Ok((value, consumed))
         }
     };
 
     let (vis, dead_code) = getter_visibility(attrs);
     field_accum.field_getter = quote! {
         #dead_code
-        #vis fn #field_name(&self) -> #return_ty {
-            self.#raw_fn_name().0
+        #vis fn #field_name(&self) -> ::binparse::ParseResult<#return_ty> {
+            self.#raw_fn_name().map(|(value, _)| value)
         }
     };
 
-    let len_expr = quote! {
-        binparse::Len { byte: self.#raw_fn_name().1, bit: 0 }
-    };
-    field_accum.len = GeneratedLen::Dynamic(len_expr);
+    field_accum.len = GeneratedLen::Dynamic(quote! {
+        match self.#raw_fn_name() {
+            Ok((_, consumed)) => binparse::Len { byte: consumed, bit: 0 },
+            Err(_) => binparse::Len::ZERO,
+        }
+    });
     field_accum.field_type = DoneFieldType::Other;
+    field_accum.pre_length_checks = quote! {
+        me.#raw_fn_name()?;
+    };
 
     Ok(())
 }

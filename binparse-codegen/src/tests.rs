@@ -2383,6 +2383,7 @@ fn golden_vla_hook() {
                         });
                     }
                 }
+                me.name_raw()?;
                 {
                     let len = me.name_end_offset();
                     let expected = len.byte_ceil();
@@ -2421,11 +2422,27 @@ fn golden_vla_hook() {
             pub fn len_bit_range(&self) -> ::core::ops::Range<usize> {
                 self.len_start_offset().bits()..self.len_end_offset().bits()
             }
-            fn name_raw(&self) -> (String, usize) {
-                parse_cstring(&self.data[self.len_end_offset().byte..])
+            fn name_raw(&self) -> ::binparse::ParseResult<(String, usize)> {
+                let start = 1usize;
+                let (value, consumed) = parse_cstring(
+                    &self.data[start..],
+                    ::binparse::HookContext {
+                        field: "WithVlaHook.name",
+                        offset: start,
+                        enclosing: self.data,
+                    },
+                )?;
+                let end = start.saturating_add(consumed);
+                if end > self.data.len() {
+                    return Err(::binparse::ParseError::NotEnoughData {
+                        expected: end,
+                        got: self.data.len(),
+                    });
+                }
+                Ok((value, consumed))
             }
-            pub fn name(&self) -> String {
-                self.name_raw().0
+            pub fn name(&self) -> ::binparse::ParseResult<String> {
+                self.name_raw().map(|(value, _)| value)
             }
             pub fn name_end_offset(&self) -> binparse::Len {
                 ::binparse::Len {
@@ -2433,9 +2450,14 @@ fn golden_vla_hook() {
                     bit: 0usize,
                 }
                     + ({
-                        binparse::Len {
-                            byte: self.name_raw().1,
-                            bit: 0,
+                        match self.name_raw() {
+                            Ok((_, consumed)) => {
+                                binparse::Len {
+                                    byte: consumed,
+                                    bit: 0,
+                                }
+                            }
+                            Err(_) => binparse::Len::ZERO,
                         }
                     })
             }
@@ -3553,6 +3575,12 @@ fn greedy_with_hook_is_rejected() {
         err.to_string()
             .contains("@greedy cannot be combined with @hook")
     );
+}
+
+#[test]
+fn hook_on_non_u8_vla_is_rejected() {
+    let err = generate_err("struct Foo { @hook(f, u8) data: [u16] }");
+    assert!(err.to_string().contains("@hook on VLA requires [u8] type"));
 }
 
 #[test]

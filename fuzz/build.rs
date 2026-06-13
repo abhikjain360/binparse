@@ -135,6 +135,20 @@ struct Bounded {
     @len(length) value: Inner,
     after: u8,
 }
+
+struct Varint {
+    tag: u8,
+    @hook(read_leb128, u64) value: [u8],
+    after: u8,
+}
+
+struct DnsMsg {
+    id: u16,
+    @hook(parse_dns_name, String) qname: [u8],
+    qtype: u16,
+    @hook(parse_dns_name, String) aname: [u8],
+    atype: u16,
+}
 "#;
 
 fn main() {

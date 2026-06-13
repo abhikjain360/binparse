@@ -37,6 +37,21 @@ impl Len {
     }
 }
 
+/// Context passed to consuming hooks: `fn(&[u8], HookContext<'_>) -> ParseResult<(T, usize)>`.
+///
+/// The data slice given to the hook spans from the field's start to the end
+/// of the enclosing struct's (already bounded) slice; the returned `usize` is
+/// the number of bytes consumed from the field's start and may not exceed that
+/// slice. `enclosing` is the enclosing struct's full slice and `offset` the
+/// field's byte offset within it, so hooks for back-referencing formats (e.g.
+/// DNS name compression) can inspect earlier bytes without escaping the bound.
+#[derive(Debug, Clone, Copy)]
+pub struct HookContext<'a> {
+    pub field: &'static str,
+    pub offset: usize,
+    pub enclosing: &'a [u8],
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
 pub enum ParseError {
     #[error("not enough data: expected {expected} bytes, got {got}")]
@@ -52,6 +67,11 @@ pub enum ParseError {
         field: &'static str,
         align: usize,
         offset: Len,
+    },
+    #[error("hook failed for field '{field}': {reason}")]
+    HookFailed {
+        field: &'static str,
+        reason: &'static str,
     },
 }
 

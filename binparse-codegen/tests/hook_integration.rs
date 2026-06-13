@@ -56,11 +56,13 @@ struct Test {
 
     let code = generate_code(dsl);
 
-    assert!(code.contains("fn data_raw(&self) -> (MyResult, usize)"), "should have raw helper");
-    assert!(code.contains("pub fn data(&self) -> MyResult"), "should have public getter");
-    assert!(code.contains("self.data_raw().0"), "getter should return first element of tuple");
-    assert!(code.contains("self.data_raw().1"), "offset should use second element of tuple");
-    assert!(code.contains("my_vla_hook(&self.data["), "should call hook with slice");
+    assert!(code.contains("fn data_raw(&self) -> ::binparse::ParseResult<(MyResult, usize)>"), "should have fallible raw helper");
+    assert!(code.contains("pub fn data(&self) -> ::binparse::ParseResult<MyResult>"), "should have fallible public getter");
+    assert!(code.contains("self.data_raw().map(|(value, _)| value)"), "getter should map out the value");
+    assert!(code.contains("me.data_raw()?;"), "parse should propagate hook errors");
+    assert!(code.contains("my_vla_hook("), "should call hook");
+    assert!(code.contains("::binparse::HookContext"), "should pass hook context");
+    assert!(code.contains("enclosing: self.data"), "context should carry enclosing slice");
 }
 
 #[test]
@@ -74,7 +76,7 @@ struct Test {
 
     let code = generate_code(dsl);
 
-    assert!(code.contains("first_hook(&self.data[0..])"), "should start at offset 0 when first field");
+    assert!(code.contains("let start = 0usize;"), "should start at offset 0 when first field");
 }
 
 #[test]
@@ -105,6 +107,6 @@ struct Test {
 
     let code = generate_code(dsl);
 
-    assert!(code.contains("self.data_raw().1"), "should use hook's returned length");
-    assert!(code.contains("byte: self.data_raw().1"), "offset calculation should include dynamic length");
+    assert!(code.contains("Ok((_, consumed)) =>"), "should use hook's returned length");
+    assert!(code.contains("byte: consumed"), "offset calculation should include consumed bytes");
 }
