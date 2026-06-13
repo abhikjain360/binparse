@@ -128,6 +128,13 @@ struct ConcatUnion {
     ),
     tail: u8,
 }
+
+struct Bounded {
+    tag: u8,
+    length: u8,
+    @len(length) value: Inner,
+    after: u8,
+}
 "#;
 
 fn main() {

@@ -180,4 +180,16 @@ fuzz_target!(|data: &[u8]| {
             }
         }
     }
+
+    if let Ok((packet, _)) = Bounded::parse(data) {
+        let _ = packet.tag();
+        let _ = packet.length();
+        let _ = packet.value_bit_range();
+        if let Ok(inner) = packet.value() {
+            let _ = inner.a();
+            let _ = inner.b();
+        }
+        let _ = packet.value_rest();
+        let _ = packet.after();
+    }
 });

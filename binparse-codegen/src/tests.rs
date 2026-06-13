@@ -3911,3 +3911,316 @@ fn pad_wrong_arg_count_is_rejected() {
             .contains("@pad_to requires exactly 1 argument(s), got 2")
     );
 }
+
+#[test]
+fn golden_len_bounded_struct_ref() {
+    assert_generated_eq(
+        "struct Inner { a: u8, b: u16 }
+         struct Tlv { tag: u8, len: u8, @len(len) value: Inner, after: u8 }",
+        r#"
+        pub struct Inner<'a> {
+            #[allow(dead_code)]
+            data: &'a [u8],
+        }
+        impl<'a> Inner<'a> {
+            pub fn parse(data: &'a [u8]) -> Result<(Self, &'a [u8]), binparse::ParseError> {
+                let me = Self { data };
+                {
+                    let len = me.a_end_offset();
+                    let expected = len.byte_ceil();
+                    if data.len() < expected {
+                        return Err(binparse::ParseError::NotEnoughData {
+                            expected,
+                            got: data.len(),
+                        });
+                    }
+                }
+                {
+                    let len = me.b_end_offset();
+                    let expected = len.byte_ceil();
+                    if data.len() < expected {
+                        return Err(binparse::ParseError::NotEnoughData {
+                            expected,
+                            got: data.len(),
+                        });
+                    }
+                }
+                let len = me.b_end_offset();
+                if len.bit != 0 {
+                    return Err(binparse::ParseError::UnalignedLength(len));
+                }
+                if data.len() < len.byte {
+                    return Err(binparse::ParseError::NotEnoughData {
+                        expected: len.byte,
+                        got: data.len(),
+                    });
+                }
+                Ok((me, &data[len.byte..]))
+            }
+            #[allow(clippy::identity_op)]
+            pub fn a(&self) -> u8 {
+                self.data[0usize]
+            }
+            pub fn a_end_offset(&self) -> binparse::Len {
+                binparse::Len {
+                    byte: 1usize,
+                    bit: 0usize,
+                }
+            }
+            pub fn a_start_offset(&self) -> binparse::Len {
+                binparse::Len::ZERO
+            }
+            pub fn a_bit_range(&self) -> ::core::ops::Range<usize> {
+                self.a_start_offset().bits()..self.a_end_offset().bits()
+            }
+            #[allow(clippy::identity_op)]
+            pub fn b(&self) -> u16 {
+                u16::from_be_bytes(self.data[1usize..3usize].try_into().unwrap())
+            }
+            pub fn b_end_offset(&self) -> binparse::Len {
+                binparse::Len {
+                    byte: 3usize,
+                    bit: 0usize,
+                }
+            }
+            pub fn b_start_offset(&self) -> binparse::Len {
+                self.a_end_offset()
+            }
+            pub fn b_bit_range(&self) -> ::core::ops::Range<usize> {
+                self.b_start_offset().bits()..self.b_end_offset().bits()
+            }
+        }
+        pub struct Tlv<'a> {
+            #[allow(dead_code)]
+            data: &'a [u8],
+        }
+        impl<'a> Tlv<'a> {
+            pub fn parse(data: &'a [u8]) -> Result<(Self, &'a [u8]), binparse::ParseError> {
+                let me = Self { data };
+                {
+                    let len = me.tag_end_offset();
+                    let expected = len.byte_ceil();
+                    if data.len() < expected {
+                        return Err(binparse::ParseError::NotEnoughData {
+                            expected,
+                            got: data.len(),
+                        });
+                    }
+                }
+                {
+                    let len = me.len_end_offset();
+                    let expected = len.byte_ceil();
+                    if data.len() < expected {
+                        return Err(binparse::ParseError::NotEnoughData {
+                            expected,
+                            got: data.len(),
+                        });
+                    }
+                }
+                {
+                    let len = me.value_end_offset();
+                    let expected = len.byte_ceil();
+                    if data.len() < expected {
+                        return Err(binparse::ParseError::NotEnoughData {
+                            expected,
+                            got: data.len(),
+                        });
+                    }
+                }
+                {
+                    let len = me.after_end_offset();
+                    let expected = len.byte_ceil();
+                    if data.len() < expected {
+                        return Err(binparse::ParseError::NotEnoughData {
+                            expected,
+                            got: data.len(),
+                        });
+                    }
+                }
+                let len = me.after_end_offset();
+                if len.bit != 0 {
+                    return Err(binparse::ParseError::UnalignedLength(len));
+                }
+                if data.len() < len.byte {
+                    return Err(binparse::ParseError::NotEnoughData {
+                        expected: len.byte,
+                        got: data.len(),
+                    });
+                }
+                Ok((me, &data[len.byte..]))
+            }
+            #[allow(clippy::identity_op)]
+            pub fn tag(&self) -> u8 {
+                self.data[0usize]
+            }
+            pub fn tag_end_offset(&self) -> binparse::Len {
+                binparse::Len {
+                    byte: 1usize,
+                    bit: 0usize,
+                }
+            }
+            pub fn tag_start_offset(&self) -> binparse::Len {
+                binparse::Len::ZERO
+            }
+            pub fn tag_bit_range(&self) -> ::core::ops::Range<usize> {
+                self.tag_start_offset().bits()..self.tag_end_offset().bits()
+            }
+            #[allow(clippy::identity_op)]
+            pub fn len(&self) -> u8 {
+                self.data[1usize]
+            }
+            pub fn len_end_offset(&self) -> binparse::Len {
+                binparse::Len {
+                    byte: 2usize,
+                    bit: 0usize,
+                }
+            }
+            pub fn len_start_offset(&self) -> binparse::Len {
+                self.tag_end_offset()
+            }
+            pub fn len_bit_range(&self) -> ::core::ops::Range<usize> {
+                self.len_start_offset().bits()..self.len_end_offset().bits()
+            }
+            pub fn value_rest(&self) -> ::binparse::ParseResult<&[u8]> {
+                let start = 2usize;
+                let end = start.saturating_add(self.len() as usize);
+                Inner::parse(&self.data[start..end]).map(|(_, rest)| rest)
+            }
+            #[allow(clippy::identity_op)]
+            pub fn value(&self) -> ::binparse::ParseResult<Inner<'_>> {
+                let start = 2usize;
+                let end = start.saturating_add(self.len() as usize);
+                Inner::parse(&self.data[start..end]).map(|(value, _)| value)
+            }
+            pub fn value_end_offset(&self) -> binparse::Len {
+                ::binparse::Len {
+                    byte: 2usize,
+                    bit: 0usize,
+                }
+                    + ({
+                        ::binparse::Len {
+                            byte: self.len() as usize,
+                            bit: 0,
+                        }
+                    })
+            }
+            pub fn value_start_offset(&self) -> binparse::Len {
+                self.len_end_offset()
+            }
+            pub fn value_bit_range(&self) -> ::core::ops::Range<usize> {
+                self.value_start_offset().bits()..self.value_end_offset().bits()
+            }
+            #[allow(clippy::identity_op)]
+            pub fn after(&self) -> u8 {
+                {
+                    let offset = ::binparse::Len {
+                        byte: 2usize,
+                        bit: 0usize,
+                    }
+                        + ({
+                            ::binparse::Len {
+                                byte: self.len() as usize,
+                                bit: 0,
+                            }
+                        });
+                    debug_assert!(offset.bit == 0, "primitive requires byte alignment");
+                    self.data[offset.byte]
+                }
+            }
+            pub fn after_end_offset(&self) -> binparse::Len {
+                ({
+                    ::binparse::Len {
+                        byte: 2usize,
+                        bit: 0usize,
+                    }
+                        + ({
+                            ::binparse::Len {
+                                byte: self.len() as usize,
+                                bit: 0,
+                            }
+                        })
+                })
+                    + ::binparse::Len {
+                        byte: 1usize,
+                        bit: 0usize,
+                    }
+            }
+            pub fn after_start_offset(&self) -> binparse::Len {
+                self.value_end_offset()
+            }
+            pub fn after_bit_range(&self) -> ::core::ops::Range<usize> {
+                self.after_start_offset().bits()..self.after_end_offset().bits()
+            }
+        }
+        "#,
+    );
+}
+
+#[test]
+fn len_on_primitive_is_rejected() {
+    let err = generate_err("struct Foo { n: u8, @len(n) a: u8 }");
+    assert!(
+        err.to_string()
+            .contains("@len can only be applied to struct ref fields")
+    );
+}
+
+#[test]
+fn len_on_bitfield_is_rejected() {
+    let err = generate_err("struct Foo { n: u8, @len(n) a: b<4> }");
+    assert!(
+        err.to_string()
+            .contains("@len can only be applied to struct ref fields")
+    );
+}
+
+#[test]
+fn len_on_constant_field_is_rejected() {
+    let err = generate_err("struct Foo { n: u8, @len(n) magic = xff }");
+    assert!(
+        err.to_string()
+            .contains("@len can only be applied to struct ref fields")
+    );
+}
+
+#[test]
+fn len_wrong_arg_count_is_rejected() {
+    let err = generate_err(
+        "struct Inner { a: u8 }
+         struct Foo { n: u8, @len(n, 2) value: Inner }",
+    );
+    assert!(
+        err.to_string()
+            .contains("@len requires exactly 1 argument(s), got 2")
+    );
+}
+
+#[test]
+fn len_bound_smaller_than_fixed_inner_is_rejected() {
+    let err = generate_err(
+        "struct Inner { a: u32 }
+         struct Foo { @len(2) value: Inner }",
+    );
+    assert!(
+        err.to_string()
+            .contains("@len(2) is smaller than the referenced struct's fixed length of 4 bytes")
+    );
+}
+
+#[test]
+fn len_unknown_field_is_rejected() {
+    let err = generate_err(
+        "struct Inner { a: u8 }
+         struct Foo { @len(nope) value: Inner }",
+    );
+    assert!(err.to_string().contains("references field 'nope'"));
+}
+
+#[test]
+fn len_bound_equal_to_fixed_inner_is_accepted() {
+    let code = generate(
+        "struct Inner { a: u32 }
+         struct Foo { @len(4) value: Inner }",
+    );
+    assert!(code.contains("fn value_rest"));
+}

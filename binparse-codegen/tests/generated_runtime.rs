@@ -969,6 +969,59 @@ mod tests {{
             let _ = ConcatUnion::parse(data);
         }});
     }}
+
+    #[test]
+    fn len_bounded_struct_ref_decodes_within_bound() {{
+        let data = [7, 5, 0x01, 0x02, 0x03, 0xaa, 0xbb, 0x99];
+        let (packet, rem) = Bounded::parse(&data).unwrap();
+        assert!(rem.is_empty());
+        assert_eq!(packet.tag(), 7);
+        assert_eq!(packet.len(), 5);
+        let inner = packet.value().unwrap();
+        assert_eq!(inner.a(), 0x01);
+        assert_eq!(inner.b(), 0x0203);
+        assert_eq!(packet.value_rest().unwrap(), &[0xaa, 0xbb]);
+        assert_eq!(packet.after(), 0x99);
+        assert_eq!(packet.value_bit_range(), 16..56);
+
+        let exact = [7, 3, 0x01, 0x02, 0x03, 0x99];
+        let (packet, rem) = Bounded::parse(&exact).unwrap();
+        assert!(rem.is_empty());
+        assert_eq!(packet.value().unwrap().b(), 0x0203);
+        assert!(packet.value_rest().unwrap().is_empty());
+        assert_eq!(packet.after(), 0x99);
+    }}
+
+    #[test]
+    fn len_bounded_struct_ref_rejects_inner_overrun() {{
+        let data = [7, 2, 0x01, 0x02, 0x99];
+        let (packet, rem) = Bounded::parse(&data).unwrap();
+        assert!(rem.is_empty());
+        match packet.value() {{
+            Err(err) => assert_eq!(
+                err,
+                binparse::ParseError::NotEnoughData {{ expected: 3, got: 2 }}
+            ),
+            Ok(_) => panic!("expected bounded inner parse to fail"),
+        }}
+        assert_eq!(
+            packet.value_rest().unwrap_err(),
+            binparse::ParseError::NotEnoughData {{ expected: 3, got: 2 }}
+        );
+        assert_eq!(packet.after(), 0x99);
+    }}
+
+    #[test]
+    fn len_bounded_struct_ref_truncation_fails_parse() {{
+        let data = [7, 5, 0x01, 0x02, 0x03, 0xaa, 0xbb, 0x99];
+        assert_eq!(
+            Bounded::parse(&data[..6]).map(|_| ()).unwrap_err(),
+            binparse::ParseError::NotEnoughData {{ expected: 7, got: 6 }}
+        );
+        assert_parse_no_panic("Bounded", &data, |data| {{
+            let _ = Bounded::parse(data);
+        }});
+    }}
 }}
 "#
         ),
@@ -1200,6 +1253,13 @@ struct ConcatUnion {
         union(b) { 2 => Bytes { n: u8, data: [u8; n] }, _ => Skip { } }
     ),
     tail: u8,
+}
+
+struct Bounded {
+    tag: u8,
+    len: u8,
+    @len(len) value: Inner,
+    after: u8,
 }
 "#;
 

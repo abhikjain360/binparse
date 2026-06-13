@@ -106,9 +106,13 @@ pub(crate) fn generate<'a>(
                 check_bit_order_applies(ty)?;
             }
             check_array_attrs_apply(&attrs, ty)?;
+            check_len_applies(&attrs, ty)?;
 
             if struct_accum.condition.is_some() && matches!(ty, ast::Type::Concat(_)) {
                 todo!("concat fields inside conditionals");
+            }
+            if struct_accum.condition.is_some() && attrs.len.is_some() {
+                todo!("@len fields inside conditionals");
             }
 
             match (&attrs.hook, is_vla(ty)) {
@@ -156,6 +160,7 @@ pub(crate) fn generate<'a>(
                 check_bit_order_applies(&ty)?;
             }
             check_array_attrs_apply(&attrs, &ty)?;
+            check_len_applies(&attrs, &ty)?;
             generate_plain(
                 &ty,
                 done,
@@ -436,7 +441,7 @@ fn generate_plain<'a>(
     Ok(())
 }
 
-fn getter_visibility(attrs: &ParsedAttrs<'_>) -> (TokenStream, TokenStream) {
+pub(crate) fn getter_visibility(attrs: &ParsedAttrs<'_>) -> (TokenStream, TokenStream) {
     if attrs.skip {
         (TokenStream::new(), quote! { #[allow(dead_code)] })
     } else {
@@ -517,6 +522,22 @@ fn check_array_attrs_apply(attrs: &ParsedAttrs<'_>, ty: &ast::Type<'_>) -> Resul
         return Err(attr::Error::UntilWithGreedy);
     }
     Ok(())
+}
+
+fn check_len_applies(attrs: &ParsedAttrs<'_>, ty: &ast::Type<'_>) -> Result<(), attr::Error> {
+    if attrs.len.is_none() {
+        return Ok(());
+    }
+    if attrs.hook.is_some() {
+        todo!("@len with @hook");
+    }
+    match ty {
+        ast::Type::StructRef(_) => Ok(()),
+        ast::Type::Array(_) | ast::Type::Concat(_) | ast::Type::Union(_) => {
+            todo!("@len on array, concat, and union fields")
+        }
+        ast::Type::Primitive(_) | ast::Type::BitField(_) => Err(attr::Error::LenOnNonStructRef),
+    }
 }
 
 fn check_bit_order_applies(ty: &ast::Type<'_>) -> Result<(), attr::Error> {

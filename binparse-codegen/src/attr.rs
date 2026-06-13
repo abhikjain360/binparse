@@ -78,6 +78,8 @@ pub enum Error {
     InvalidPaddingArg(&'static str),
     #[error("@pad and @pad_to cannot be combined")]
     PadWithPadTo,
+    #[error("@len can only be applied to struct ref fields")]
+    LenOnNonStructRef,
 }
 
 /// Padding and alignment semantics: `@pad(N)` consumes N bytes before the
@@ -87,6 +89,15 @@ pub enum Error {
 /// failing codegen for fixed offsets and parsing for dynamic offsets. `@skip`
 /// parses and validates the field as usual but omits it from the public
 /// accessor surface.
+///
+/// Length bounding semantics: `@len(expr)` declares that a struct ref field
+/// occupies exactly `expr` bytes. The nested parser receives only that slice,
+/// so it cannot read outside its bound, and the enclosing struct advances by
+/// exactly `expr` bytes regardless of how many the nested struct consumed.
+/// Bytes left unconsumed inside the bound are not an error; they are exposed
+/// via the generated `{field}_rest()` getter for higher-level dispatch. A
+/// nested struct needing more than `expr` bytes surfaces as `NotEnoughData`
+/// relative to the bounded slice from the field getter.
 #[derive(Debug, Clone, Default)]
 pub(crate) struct ParsedAttrs<'a> {
     pub endian: Option<Endian>,
@@ -101,6 +112,7 @@ pub(crate) struct ParsedAttrs<'a> {
     pub pad: Option<usize>,
     pub pad_to: Option<usize>,
     pub align: Option<usize>,
+    pub len: Option<ast::Expr<'a>>,
 }
 
 impl<'a> ParsedAttrs<'a> {
@@ -131,6 +143,7 @@ impl<'a> ParsedAttrs<'a> {
                     result.skip = true;
                 }
                 "pad" => result.pad = Some(Self::parse_padding(attr, "pad")?),
+                "len" => result.len = Some(Self::parse_check(attr, "len")?),
                 "pad_to" => result.pad_to = Some(Self::parse_padding(attr, "pad_to")?),
                 "align" => result.align = Some(Self::parse_padding(attr, "align")?),
                 _ => {}

@@ -37,6 +37,8 @@ pub enum Error {
     UnknownType(String),
     #[error("array without size requires @until, @greedy, or @hook")]
     UnsizedArray,
+    #[error("@len({bound}) is smaller than the referenced struct's fixed length of {needed} bytes")]
+    LenBoundTooSmall { bound: usize, needed: usize },
     #[error("@greedy element type has zero length")]
     GreedyZeroSizedElem,
     #[error(transparent)]
@@ -69,7 +71,7 @@ pub(crate) fn generate<'a>(
             concat::generate(items, done, struct_accum, field_accum, start_offset, inherited, errors)
         }
         ast::Type::StructRef(struct_name) => {
-            struct_ref::generate(struct_name, done, field_accum, start_offset)
+            struct_ref::generate(struct_name, done, struct_accum, field_accum, start_offset, attrs)
         }
         ast::Type::Array(array_type) => {
             array::generate(array_type, attrs, done, struct_accum, field_accum, start_offset, inherited)
