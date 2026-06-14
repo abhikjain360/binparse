@@ -1,13 +1,15 @@
 //! MQTT 3.1.1 + v5: binparse vs the rumqtt codecs.
 //!
-//! Two rumqtt codecs are compared: the shipping standalone `mqttbytes 0.6`
-//! (what rumqttc depends on today) and the in-progress next-line codec bundled
-//! in `rumqttc-v4-next`/`rumqttc-v5-next`. Both decode a whole packet out of a
-//! `BytesMut` into owned structs (allocating topic/payload), whereas binparse
-//! borrows the input and reads fields lazily — so this is decode-into-owned vs
-//! zero-copy, not a like-for-like memory model. The rumqtt buffers are rebuilt
-//! per iteration via `iter_batched` setup (untimed) because `read()` drains
-//! them; binparse borrows a `'static` slice and needs no setup.
+//! Three rumqtt codecs are compared: the shipping standalone `mqttbytes 0.6`
+//! (what rumqttc depends on today), the in-progress next-line client codec
+//! bundled in `rumqttc-v4-next`/`rumqttc-v5-next`, and the broker-side codec in
+//! `rumqttd 0.20` (`protocol::v4::V4`/`v5::V5` via the `Protocol::read_mut`
+//! trait method). All three decode a whole packet out of a `BytesMut` into owned
+//! structs (allocating topic/payload), whereas binparse borrows the input and
+//! reads fields lazily — so this is decode-into-owned vs zero-copy, not a
+//! like-for-like memory model. The rumqtt buffers are rebuilt per iteration via
+//! `iter_batched` setup (untimed) because `read()` drains them; binparse borrows
+//! a `'static` slice and needs no setup.
 
 use std::hint::black_box;
 
@@ -66,6 +68,17 @@ fn v3_connect(c: &mut Criterion) {
             BatchSize::SmallInput,
         )
     });
+    g.bench_function("rumqttd_0.20", |b| {
+        use rumqttd::protocol::{Packet, Protocol, v4::V4};
+        b.iter_batched(
+            || buf(MQTT_V3_CONNECT),
+            |mut buf| match V4.read_mut(&mut buf, MAX).unwrap() {
+                Packet::Connect(c, ..) => black_box(c.keep_alive as u64 ^ c.client_id.len() as u64),
+                _ => unreachable!(),
+            },
+            BatchSize::SmallInput,
+        )
+    });
     g.finish();
 }
 
@@ -102,6 +115,19 @@ fn v3_publish(c: &mut Criterion) {
             |mut buf| match v4::Packet::read(&mut buf, MAX).unwrap() {
                 v4::Packet::Publish(p) => {
                     black_box(p.topic.len() as u64 ^ p.payload.len() as u64 ^ p.qos as u64)
+                }
+                _ => unreachable!(),
+            },
+            BatchSize::SmallInput,
+        )
+    });
+    g.bench_function("rumqttd_0.20", |b| {
+        use rumqttd::protocol::{Packet, Protocol, v4::V4};
+        b.iter_batched(
+            || buf(MQTT_V3_PUBLISH),
+            |mut buf| match V4.read_mut(&mut buf, MAX).unwrap() {
+                Packet::Publish(p, _) => {
+                    black_box(p.topic.len() as u64 ^ p.payload.len() as u64)
                 }
                 _ => unreachable!(),
             },
@@ -150,6 +176,10 @@ fn v5_connack(c: &mut Criterion) {
             BatchSize::SmallInput,
         )
     });
+    // No rumqttd arm here: its `protocol::v5` codec is the broker's read path,
+    // which only decodes client->server packets. CONNACK is server->client, so
+    // `V5::read_mut` reaches `unreachable!()` on it. rumqttd participates in the
+    // v3 CONNECT/PUBLISH groups (both client->server) instead.
     g.finish();
 }
 

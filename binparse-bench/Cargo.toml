@@ -21,6 +21,7 @@ rumqttc_v5_next = { package = "rumqttc-v5-next", version = "0.33" }
 bytes = "1"
 tls-parser = "0.12"
 simple-dns = "0.11"
+rumqttd = { version = "0.20", default-features = false }
 
 [[bench]]
 name = "network"
