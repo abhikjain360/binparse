@@ -51,7 +51,7 @@ pub enum Error {
     NonLiteralConstraint,
     #[error("validations are not supported on conditional fields")]
     ValidationOnConditional,
-    #[error("@cache(value) is only supported on @hook fields")]
+    #[error("@cache(value) is only supported on @hook or union fields")]
     CacheValueOnNonHook,
 }
 
@@ -86,7 +86,12 @@ pub(crate) fn generate<'a>(
     let field_inherited = attrs.merge_inherited(struct_accum.inherited);
     let mut field_accum = FieldAccum::new(ast.name);
 
-    if attrs.cache_value && attrs.hook.is_none() {
+    let cache_value_supported = attrs.hook.is_some()
+        || matches!(
+            ast.value,
+            ast::FieldValue::Type(ast::Type::Union(_))
+        );
+    if attrs.cache_value && !cache_value_supported {
         return Err(Error::CacheValueOnNonHook);
     }
 

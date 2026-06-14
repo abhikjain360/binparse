@@ -98,7 +98,7 @@ fn cache_value_on_non_hook_is_rejected() {
     let err = generate_err("struct Foo { count: u8, @cache(value) value: u16 }");
     assert!(
         err.to_string()
-            .contains("@cache(value) is only supported on @hook fields")
+            .contains("@cache(value) is only supported on @hook or union fields")
     );
 }
 #[test]

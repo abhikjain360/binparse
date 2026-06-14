@@ -2,7 +2,7 @@ struct MqttPacket {
     packet_type: b<4>,
     flags: b<4>,
     @hook(binparse.hooks.leb128_unsigned, u64) @cache remaining_length: [u8],
-    @len(remaining_length) body: union(packet_type) {
+    @len(remaining_length) @cache body: union(packet_type) {
         1 => Connect {
             proto_name_len: u16,
             proto_name: [u8; proto_name_len],

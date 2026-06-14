@@ -45,6 +45,20 @@ fn golden_union_error_variant() {
     );
 }
 #[test]
+fn golden_cache_len_value_union() {
+    assert_generated_eq(
+        r#"struct Packet {
+            ty: u8,
+            len: u8,
+            @len(len) @cache payload: union(ty) {
+                1 => Echo { id: u16 },
+                _ => Unknown { },
+            },
+        }"#,
+        "cache_len_value_union",
+    );
+}
+#[test]
 fn discriminator_on_struct_ref_is_rejected() {
     let err = generate_err(
         "struct Inner { x: u8 } struct Foo { @discriminator inner: Inner, @payload p: [u8; 1] }",

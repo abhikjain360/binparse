@@ -78,6 +78,7 @@ fn read_leb128(data: &[u8], ctx: binparse::HookContext<'_>) -> binparse::ParseRe
 static COUNTING_HOOK_CALLS: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
 static COUNTING_VALUE_HOOK_CALLS: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
 static COUNTING_LEN_VALUE_HOOK_CALLS: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+static COUNTING_UNION_HOOK_CALLS: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
 
 fn counting_cstring(data: &[u8], ctx: binparse::HookContext<'_>) -> binparse::ParseResult<(String, usize)> {{
     COUNTING_HOOK_CALLS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
@@ -91,6 +92,11 @@ fn counting_value_cstring(data: &[u8], ctx: binparse::HookContext<'_>) -> binpar
 
 fn counting_len_value_cstring(data: &[u8], ctx: binparse::HookContext<'_>) -> binparse::ParseResult<(String, usize)> {{
     COUNTING_LEN_VALUE_HOOK_CALLS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    binparse::hooks::cstring(data, ctx)
+}}
+
+fn counting_union_cstring(data: &[u8], ctx: binparse::HookContext<'_>) -> binparse::ParseResult<(String, usize)> {{
+    COUNTING_UNION_HOOK_CALLS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
     binparse::hooks::cstring(data, ctx)
 }}
 
@@ -638,6 +644,23 @@ mod tests {{
         let value_node = tree.children.iter().find(|c| c.name == "value").unwrap();
         assert_eq!(value_node.value, binparse::Value::UInt(4));
         assert_eq!(COUNTING_TRANSFORM_CALLS.load(std::sync::atomic::Ordering::Relaxed), 1);
+    }}
+
+    #[test]
+    fn cached_union_preserves_inner_hook_cache_from_parse_to_getter() {{
+        let data = [1, 3, b'h', b'i', 0, 9];
+        COUNTING_UNION_HOOK_CALLS.store(0, std::sync::atomic::Ordering::Relaxed);
+        let (mut packet, rem) = CachedUnion::parse(&data).unwrap();
+        assert!(rem.is_empty());
+        assert_eq!(COUNTING_UNION_HOOK_CALLS.load(std::sync::atomic::Ordering::Relaxed), 1);
+
+        match packet.body().unwrap() {{
+            CachedUnion_body::Msg(msg) => assert_eq!(msg.value().unwrap().as_str(), "hi"),
+            _ => unreachable!(),
+        }}
+        let _ = packet.body_bit_range();
+        assert_eq!(packet.trailer(), 9);
+        assert_eq!(COUNTING_UNION_HOOK_CALLS.load(std::sync::atomic::Ordering::Relaxed), 1);
     }}
 
     #[test]
@@ -2774,6 +2797,18 @@ struct CachedFixedHook {
     prefix: u8,
     @hook(counting_double_it, u32) @cache(value) value: u16,
     suffix: u8,
+}
+
+struct CachedUnion {
+    ty: u8,
+    len: u8,
+    @len(len) @cache body: union(ty) {
+        1 => Msg {
+            @hook(counting_union_cstring, String) @cache value: [u8],
+        },
+        _ => Raw { },
+    },
+    trailer: u8,
 }
 
 struct Eth {

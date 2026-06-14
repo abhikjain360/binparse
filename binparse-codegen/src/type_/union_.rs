@@ -108,7 +108,9 @@ pub(crate) fn generate<'a>(
     let mut variant_structs = TokenStream::new();
     let mut enum_variants = TokenStream::new();
     let mut match_arms = TokenStream::new();
+    let mut cached_match_arms = TokenStream::new();
     let mut len_match_arms = TokenStream::new();
+    let mut value_len_arms = TokenStream::new();
     let mut check_match_arms = TokenStream::new();
     let mut rest_match_arms = TokenStream::new();
     let mut tree_arms = TokenStream::new();
@@ -154,6 +156,10 @@ pub(crate) fn generate<'a>(
                     #struct_name::parse(#parse_slice)
                         .map(|(value, _)| #enum_name::#variant_ident(value))
                 };
+                let parse_cached_variant = quote! {
+                    #struct_name::parse(#parse_slice)
+                        .map(|(value, rest)| (#enum_name::#variant_ident(value), rest))
+                };
                 rest_match_arms.extend(quote! {
                     #matchers => #struct_name::parse(#parse_slice).map(|(_, rest)| rest),
                 });
@@ -161,13 +167,19 @@ pub(crate) fn generate<'a>(
                     match_arms.extend(quote! {
                         #matchers => #parse_variant.map_err(Error::Parse),
                     });
+                    cached_match_arms.extend(quote! {
+                        #matchers => #parse_cached_variant.map_err(Error::Parse),
+                    });
                 } else {
                     match_arms.extend(quote! {
                         #matchers => #parse_variant,
                     });
+                    cached_match_arms.extend(quote! {
+                        #matchers => #parse_cached_variant,
+                    });
                 }
 
-                let variant_len = match generated.len {
+                let variant_len = match &generated.len {
                     GeneratedLen::Fixed(len) => {
                         let byte = len.byte;
                         let bit = len.bit;
@@ -176,6 +188,7 @@ pub(crate) fn generate<'a>(
                     GeneratedLen::Dynamic(_) => {
                         let last_offset_getter = generated
                             .last_offset_getter
+                            .clone()
                             .expect("dynamic-length variant struct has an offset getter");
                         let variant_inits = generated.cache_inits.clone();
                         let ctor = if variant_inits.is_empty() {
@@ -194,6 +207,25 @@ pub(crate) fn generate<'a>(
                 len_match_arms.extend(quote! {
                     #matchers => #variant_len,
                 });
+                let variant_value_len = match &generated.len {
+                    GeneratedLen::Fixed(len) => {
+                        let byte = len.byte;
+                        let bit = len.bit;
+                        quote! {
+                            #enum_name::#variant_ident(_) => ::binparse::Len { byte: #byte, bit: #bit },
+                        }
+                    }
+                    GeneratedLen::Dynamic(_) => {
+                        let last_offset_getter = generated
+                            .last_offset_getter
+                            .clone()
+                            .expect("dynamic-length variant struct has an offset getter");
+                        quote! {
+                            #enum_name::#variant_ident(value) => value.#last_offset_getter(),
+                        }
+                    }
+                };
+                value_len_arms.extend(variant_value_len);
 
                 check_match_arms.extend(quote! {
                     #matchers => {
@@ -202,18 +234,33 @@ pub(crate) fn generate<'a>(
                 });
 
                 let variant_name = inline_struct.name.to_string();
-                tree_arms.extend(quote! {
-                    Ok(#enum_name::#variant_ident(mut value)) => {
-                        let inner = value.field_tree().renamed(#variant_name).shifted(bit_range.start);
-                        ::binparse::FieldNode::new(
-                                #field_name_str,
-                                "union",
-                                bit_range.clone(),
-                                ::binparse::Value::UnionVariant(#variant_name),
-                            )
-                            .with_children(::std::vec![inner])
-                    }
-                });
+                if attrs.cache_value {
+                    tree_arms.extend(quote! {
+                        Ok(#enum_name::#variant_ident(value)) => {
+                            let inner = value.field_tree().renamed(#variant_name).shifted(bit_range.start);
+                            ::binparse::FieldNode::new(
+                                    #field_name_str,
+                                    "union",
+                                    bit_range.clone(),
+                                    ::binparse::Value::UnionVariant(#variant_name),
+                                )
+                                .with_children(::std::vec![inner])
+                        }
+                    });
+                } else {
+                    tree_arms.extend(quote! {
+                        Ok(#enum_name::#variant_ident(mut value)) => {
+                            let inner = value.field_tree().renamed(#variant_name).shifted(bit_range.start);
+                            ::binparse::FieldNode::new(
+                                    #field_name_str,
+                                    "union",
+                                    bit_range.clone(),
+                                    ::binparse::Value::UnionVariant(#variant_name),
+                                )
+                                .with_children(::std::vec![inner])
+                        }
+                    });
+                }
             }
 
             ast::UnionBody::Error(error_name, fields) => {
@@ -264,6 +311,9 @@ pub(crate) fn generate<'a>(
                 match_arms.extend(quote! {
                     #matchers => Err(#error_value),
                 });
+                cached_match_arms.extend(quote! {
+                    #matchers => Err(#error_value),
+                });
                 len_match_arms.extend(quote! {
                     #matchers => ::binparse::Len::ZERO,
                 });
@@ -287,44 +337,132 @@ pub(crate) fn generate<'a>(
     });
 
     let check_fn_name = format_ident!("{}_union_check", field_name);
-    accum.helper_fns.extend(quote! {
-        fn #check_fn_name(&mut self) -> Result<(), ::binparse::ParseError> {
-            match #match_expr {
-                #check_match_arms
+    let cache_fn_name = format_ident!("{}_cached", field_name);
+    if attrs.cache_value {
+        let cache_ident = format_ident!("{}_value_cache", field_name);
+        let cached_result_ty = if has_error_arms {
+            quote! { ::std::result::Result<(#enum_name<'a>, &'a [u8]), Error> }
+        } else {
+            quote! { ::binparse::ParseResult<(#enum_name<'a>, &'a [u8])> }
+        };
+        let cached_return_ty = if has_error_arms {
+            quote! { ::std::result::Result<(&mut #enum_name<'a>, &'a [u8]), Error> }
+        } else {
+            quote! { ::binparse::ParseResult<(&mut #enum_name<'a>, &'a [u8])> }
+        };
+        struct_accum.cache_field_defs.extend(quote! {
+            #cache_ident: Option<#cached_result_ty>,
+        });
+        struct_accum.cache_inits.extend(quote! {
+            #cache_ident: None,
+        });
+        accum.helper_fns.extend(quote! {
+            fn #cache_fn_name(&mut self) -> #cached_return_ty {
+                if self.#cache_ident.is_none() {
+                    let parsed = match #match_expr {
+                        #cached_match_arms
+                    };
+                    self.#cache_ident = Some(parsed);
+                }
+                match self.#cache_ident.as_mut().unwrap() {
+                    Ok((value, rest)) => Ok((value, *rest)),
+                    Err(error) => Err(*error),
+                }
             }
-            Ok(())
-        }
-    });
+        });
+        let check_body = if has_error_arms {
+            quote! {
+                match self.#cache_fn_name() {
+                    Ok(_) => Ok(()),
+                    Err(Error::Parse(error)) => Err(error),
+                    Err(_) => Ok(()),
+                }
+            }
+        } else {
+            quote! {
+                self.#cache_fn_name()?;
+                Ok(())
+            }
+        };
+        accum.helper_fns.extend(quote! {
+            fn #check_fn_name(&mut self) -> Result<(), ::binparse::ParseError> {
+                #check_body
+            }
+        });
+    } else {
+        accum.helper_fns.extend(quote! {
+            fn #check_fn_name(&mut self) -> Result<(), ::binparse::ParseError> {
+                match #match_expr {
+                    #check_match_arms
+                }
+                Ok(())
+            }
+        });
+    }
     accum.pre_length_checks.extend(quote! {
         self.#check_fn_name()?;
     });
 
-    let field_getter_body = quote! {
-        match #match_expr {
-            #match_arms
+    let field_getter_body = if attrs.cache_value {
+        quote! {
+            self.#cache_fn_name().map(|(value, _)| value)
+        }
+    } else {
+        quote! {
+            match #match_expr {
+                #match_arms
+            }
         }
     };
 
-    let return_ty = if has_error_arms {
-        quote! { Result<#enum_name<'a>, Error> }
-    } else {
-        quote! { ::binparse::ParseResult<#enum_name<'a>> }
+    let return_ty = match (has_error_arms, attrs.cache_value) {
+        (true, true) => quote! { Result<&mut #enum_name<'a>, Error> },
+        (true, false) => quote! { Result<#enum_name<'a>, Error> },
+        (false, true) => quote! { ::binparse::ParseResult<&mut #enum_name<'a>> },
+        (false, false) => quote! { ::binparse::ParseResult<#enum_name<'a>> },
     };
 
     let rest_fn_name = format_ident!("{}_rest", field_name);
     let len = match &bound {
         Some(LenBound { field_len, .. }) => {
             let (vis, dead_code) = getter_visibility(attrs);
-            accum.helper_fns.extend(quote! {
-                #dead_code
-                #vis fn #rest_fn_name(&mut self) -> ::binparse::ParseResult<&'a [u8]> {
+            let rest_body = if attrs.cache_value {
+                if has_error_arms {
+                    quote! {
+                        match self.#cache_fn_name() {
+                            Ok((_, rest)) => Ok(rest),
+                            Err(Error::Parse(error)) => Err(error),
+                            Err(_) => Ok(&self.data[#clamped_start..#clamped_start]),
+                        }
+                    }
+                } else {
+                    quote! {
+                        self.#cache_fn_name().map(|(_, rest)| rest)
+                    }
+                }
+            } else {
+                quote! {
                     match #match_expr {
                         #rest_match_arms
                     }
                 }
+            };
+            accum.helper_fns.extend(quote! {
+                #dead_code
+                #vis fn #rest_fn_name(&mut self) -> ::binparse::ParseResult<&'a [u8]> {
+                    #rest_body
+                }
             });
             field_len.clone()
         }
+        None if attrs.cache_value => GeneratedLen::Dynamic(quote! {
+            match self.#cache_fn_name() {
+                Ok((value, _)) => match value {
+                    #value_len_arms
+                },
+                Err(_) => ::binparse::Len::ZERO,
+            }
+        }),
         None => GeneratedLen::Dynamic(quote! {
             match #match_expr {
                 #len_match_arms

@@ -38,7 +38,7 @@ fn v3_connect(c: &mut Criterion) {
             let (mut pkt, _) = MqttPacket::parse(black_box(MQTT_V3_CONNECT)).unwrap();
             let pt = pkt.packet_type() as u64;
             match pkt.body().unwrap() {
-                MqttPacket_body::Connect(mut c) => {
+                MqttPacket_body::Connect(c) => {
                     black_box(pt ^ c.keep_alive() as u64 ^ sum_bp(c.proto_name().unwrap()))
                 }
                 _ => unreachable!(),
@@ -89,7 +89,7 @@ fn v3_publish(c: &mut Criterion) {
         b.iter(|| {
             let (mut pkt, _) = MqttPacket::parse(black_box(MQTT_V3_PUBLISH)).unwrap();
             match pkt.body().unwrap() {
-                MqttPacket_body::Publish(mut p) => black_box(
+                MqttPacket_body::Publish(p) => black_box(
                     p.topic_len() as u64
                         ^ sum_bp(p.topic().unwrap())
                         ^ sum_bp(p.payload().unwrap()),
@@ -144,7 +144,7 @@ fn v5_connack(c: &mut Criterion) {
         b.iter(|| {
             let (mut pkt, _) = MqttPacket::parse(black_box(MQTT_V5_CONNACK)).unwrap();
             match pkt.body().unwrap() {
-                MqttPacket_body::Connack(mut c) => black_box(
+                MqttPacket_body::Connack(c) => black_box(
                     c.reason_code() as u64
                         ^ *c.prop_len().unwrap()
                         ^ sum_bp(c.properties().unwrap()),

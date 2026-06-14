@@ -231,7 +231,7 @@ fn mqtt_v3_connect_parses() {
     assert_eq!(mqtt.packet_type(), 1);
     assert_eq!(*mqtt.remaining_length().unwrap(), 10);
     match mqtt.body().unwrap() {
-        MqttPacket_body::Connect(mut c) => {
+        MqttPacket_body::Connect(c) => {
             assert_eq!(c.keep_alive(), 60);
             let name = c
                 .proto_name()
@@ -267,7 +267,7 @@ fn mqtt_v5_connack_properties_sized_by_hook_varint() {
     assert_eq!(mqtt.packet_type(), 2);
     assert_eq!(*mqtt.remaining_length().unwrap(), 6);
     match mqtt.body().unwrap() {
-        MqttPacket_body::Connack(mut c) => {
+        MqttPacket_body::Connack(c) => {
             assert_eq!(c.reason_code(), 0);
             assert_eq!(*c.prop_len().unwrap(), 3);
             let props = c
