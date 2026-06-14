@@ -1,0 +1,657 @@
+#[allow(non_camel_case_types)]
+pub struct Udp_payload_Iterator<'a> {
+    idx: usize,
+    count: usize,
+    data: &'a [u8],
+}
+
+#[derive(Clone, Copy)]
+pub struct UdpLens {
+    pub payload: usize,
+}
+
+impl<'a> ::binparse::Dissect<'a> for Udp<'a> {
+    fn field_tree(&self) -> ::binparse::FieldNode<'a> {
+        Udp::field_tree(self)
+    }
+    fn handoff(&self) -> Option<::binparse::Handoff<'a>> {
+        Udp::handoff(self)
+    }
+}
+
+impl<'a> ::std::iter::Iterator for Udp_payload_Iterator<'a> {
+    type Item = ::binparse::ParseResult<u8>;
+    fn next(&mut self) -> std::option::Option<Self::Item> {
+        if self.idx == self.count {
+            return None;
+        }
+        self.idx += 1;
+        let value = self.data[0];
+        self.data = &self.data[1..];
+        Some(Ok(value))
+    }
+}
+
+impl<'a> Udp<'a> {
+    pub fn parse(data: &'a [u8]) -> Result<(Self, &'a [u8]), ::binparse::ParseError> {
+        let me = Self { data };
+        me.src_fatal_check()?;
+        me.src_recoverable_check()?;
+        me.dst_fatal_check()?;
+        me.dst_recoverable_check()?;
+        me.length_fatal_check()?;
+        me.length_recoverable_check()?;
+        me.checksum_fatal_check()?;
+        me.checksum_recoverable_check()?;
+        me.payload_fatal_check()?;
+        me.payload_recoverable_check()?;
+        let len = me.payload_end_offset();
+        if len.bit != 0 {
+            return Err(::binparse::ParseError::UnalignedLength(len));
+        }
+        if data.len() < len.byte {
+            return Err(::binparse::ParseError::NotEnoughData {
+                expected: len.byte,
+                got: data.len(),
+            });
+        }
+        Ok((me, &data[len.byte..]))
+    }
+    pub fn field_tree(&self) -> ::binparse::FieldNode<'a> {
+        let mut children = ::std::vec::Vec::new();
+        {
+            let me = self;
+            children.push(me.src_present_node());
+        }
+        {
+            let me = self;
+            children.push(me.dst_present_node());
+        }
+        {
+            let me = self;
+            children.push(me.length_present_node());
+        }
+        {
+            let me = self;
+            children.push(me.checksum_present_node());
+        }
+        {
+            let me = self;
+            children.push(me.payload_present_node());
+        }
+        let mut root = ::binparse::FieldNode::new(
+                "Udp",
+                "Udp",
+                0usize..self.payload_end_offset().bits(),
+                ::binparse::Value::Struct,
+            )
+            .with_children(children);
+        root.set_paths("");
+        root
+    }
+    pub fn dissect(data: &'a [u8]) -> ::binparse::FieldNode<'a> {
+        let me = Self { data };
+        let mut children: ::std::vec::Vec<::binparse::FieldNode<'a>> = ::std::vec::Vec::new();
+        let mut fatal: Option<::binparse::ParseError> = None;
+        if fatal.is_none() {
+            match me.src_fatal_check() {
+                Err(error) => {
+                    let start = me.src_start_offset().bits();
+                    children
+                        .push(
+                            ::binparse::FieldNode::new(
+                                    "src",
+                                    "u16",
+                                    start..start,
+                                    ::binparse::Value::Opaque,
+                                )
+                                .with_status(::binparse::Status::Error(error)),
+                        );
+                    fatal = Some(error);
+                }
+                Ok(()) => {
+                    match me.src_recoverable_check() {
+                        Err(error) => {
+                            let bit_range = me.src_bit_range();
+                            children
+                                .push(
+                                    ::binparse::FieldNode::new(
+                                            "src",
+                                            "u16",
+                                            bit_range,
+                                            ::binparse::Value::Opaque,
+                                        )
+                                        .with_status(::binparse::Status::Error(error)),
+                                );
+                        }
+                        Ok(()) => {
+                            children.push(me.src_present_node());
+                        }
+                    }
+                }
+            }
+        }
+        if fatal.is_none() {
+            match me.dst_fatal_check() {
+                Err(error) => {
+                    let start = me.dst_start_offset().bits();
+                    children
+                        .push(
+                            ::binparse::FieldNode::new(
+                                    "dst",
+                                    "u16",
+                                    start..start,
+                                    ::binparse::Value::Opaque,
+                                )
+                                .with_status(::binparse::Status::Error(error)),
+                        );
+                    fatal = Some(error);
+                }
+                Ok(()) => {
+                    match me.dst_recoverable_check() {
+                        Err(error) => {
+                            let bit_range = me.dst_bit_range();
+                            children
+                                .push(
+                                    ::binparse::FieldNode::new(
+                                            "dst",
+                                            "u16",
+                                            bit_range,
+                                            ::binparse::Value::Opaque,
+                                        )
+                                        .with_status(::binparse::Status::Error(error)),
+                                );
+                        }
+                        Ok(()) => {
+                            children.push(me.dst_present_node());
+                        }
+                    }
+                }
+            }
+        }
+        if fatal.is_none() {
+            match me.length_fatal_check() {
+                Err(error) => {
+                    let start = me.length_start_offset().bits();
+                    children
+                        .push(
+                            ::binparse::FieldNode::new(
+                                    "length",
+                                    "u16",
+                                    start..start,
+                                    ::binparse::Value::Opaque,
+                                )
+                                .with_status(::binparse::Status::Error(error)),
+                        );
+                    fatal = Some(error);
+                }
+                Ok(()) => {
+                    match me.length_recoverable_check() {
+                        Err(error) => {
+                            let bit_range = me.length_bit_range();
+                            children
+                                .push(
+                                    ::binparse::FieldNode::new(
+                                            "length",
+                                            "u16",
+                                            bit_range,
+                                            ::binparse::Value::Opaque,
+                                        )
+                                        .with_status(::binparse::Status::Error(error)),
+                                );
+                        }
+                        Ok(()) => {
+                            children.push(me.length_present_node());
+                        }
+                    }
+                }
+            }
+        }
+        if fatal.is_none() {
+            match me.checksum_fatal_check() {
+                Err(error) => {
+                    let start = me.checksum_start_offset().bits();
+                    children
+                        .push(
+                            ::binparse::FieldNode::new(
+                                    "checksum",
+                                    "u16",
+                                    start..start,
+                                    ::binparse::Value::Opaque,
+                                )
+                                .with_status(::binparse::Status::Error(error)),
+                        );
+                    fatal = Some(error);
+                }
+                Ok(()) => {
+                    match me.checksum_recoverable_check() {
+                        Err(error) => {
+                            let bit_range = me.checksum_bit_range();
+                            children
+                                .push(
+                                    ::binparse::FieldNode::new(
+                                            "checksum",
+                                            "u16",
+                                            bit_range,
+                                            ::binparse::Value::Opaque,
+                                        )
+                                        .with_status(::binparse::Status::Error(error)),
+                                );
+                        }
+                        Ok(()) => {
+                            children.push(me.checksum_present_node());
+                        }
+                    }
+                }
+            }
+        }
+        if fatal.is_none() {
+            match me.payload_fatal_check() {
+                Err(error) => {
+                    let start = me.payload_start_offset().bits();
+                    children
+                        .push(
+                            ::binparse::FieldNode::new(
+                                    "payload",
+                                    "[u8]",
+                                    start..start,
+                                    ::binparse::Value::Opaque,
+                                )
+                                .with_status(::binparse::Status::Error(error)),
+                        );
+                    fatal = Some(error);
+                }
+                Ok(()) => {
+                    match me.payload_recoverable_check() {
+                        Err(error) => {
+                            let bit_range = me.payload_bit_range();
+                            children
+                                .push(
+                                    ::binparse::FieldNode::new(
+                                            "payload",
+                                            "[u8]",
+                                            bit_range,
+                                            ::binparse::Value::Opaque,
+                                        )
+                                        .with_status(::binparse::Status::Error(error)),
+                                );
+                        }
+                        Ok(()) => {
+                            children.push(me.payload_present_node());
+                        }
+                    }
+                }
+            }
+        }
+        let root_end = children.last().map(|child| child.bit_range.end).unwrap_or(0);
+        let mut root = ::binparse::FieldNode::new(
+                "Udp",
+                "Udp",
+                0usize..root_end,
+                ::binparse::Value::Struct,
+            )
+            .with_children(children);
+        if let Some(error) = fatal {
+            root = root.with_status(::binparse::Status::Error(error));
+        }
+        root.set_paths("");
+        root
+    }
+    pub fn handoff(&self) -> Option<::binparse::Handoff<'a>> {
+        None
+    }
+    #[allow(dead_code)]
+    fn src_present_node(&self) -> ::binparse::FieldNode<'a> {
+        let bit_range = self.src_bit_range();
+        ::binparse::FieldNode::new(
+            "src",
+            "u16",
+            bit_range.clone(),
+            ::binparse::Value::UInt(u128::from(self.src())),
+        )
+    }
+    #[allow(clippy::identity_op)]
+    pub fn src(&self) -> u16 {
+        u16::from_be_bytes(self.data[0usize..2usize].try_into().unwrap())
+    }
+    pub fn src_end_offset(&self) -> binparse::Len {
+        binparse::Len {
+            byte: 2usize,
+            bit: 0usize,
+        }
+    }
+    pub fn src_start_offset(&self) -> binparse::Len {
+        binparse::Len::ZERO
+    }
+    pub fn src_bit_range(&self) -> ::core::ops::Range<usize> {
+        self.src_start_offset().bits()..self.src_end_offset().bits()
+    }
+    #[allow(dead_code)]
+    fn src_fatal_check(&self) -> Result<(), ::binparse::ParseError> {
+        {
+            let len = self.src_end_offset();
+            let expected = len.byte_ceil();
+            if self.data.len() < expected {
+                return Err(::binparse::ParseError::NotEnoughData {
+                    expected,
+                    got: self.data.len(),
+                });
+            }
+        }
+        Ok(())
+    }
+    #[allow(dead_code)]
+    fn src_recoverable_check(&self) -> Result<(), ::binparse::ParseError> {
+        Ok(())
+    }
+    #[allow(dead_code)]
+    fn dst_present_node(&self) -> ::binparse::FieldNode<'a> {
+        let bit_range = self.dst_bit_range();
+        ::binparse::FieldNode::new(
+            "dst",
+            "u16",
+            bit_range.clone(),
+            ::binparse::Value::UInt(u128::from(self.dst())),
+        )
+    }
+    #[allow(clippy::identity_op)]
+    pub fn dst(&self) -> u16 {
+        u16::from_be_bytes(self.data[2usize..4usize].try_into().unwrap())
+    }
+    pub fn dst_end_offset(&self) -> binparse::Len {
+        binparse::Len {
+            byte: 4usize,
+            bit: 0usize,
+        }
+    }
+    pub fn dst_start_offset(&self) -> binparse::Len {
+        self.src_end_offset()
+    }
+    pub fn dst_bit_range(&self) -> ::core::ops::Range<usize> {
+        self.dst_start_offset().bits()..self.dst_end_offset().bits()
+    }
+    #[allow(dead_code)]
+    fn dst_fatal_check(&self) -> Result<(), ::binparse::ParseError> {
+        {
+            let len = self.dst_end_offset();
+            let expected = len.byte_ceil();
+            if self.data.len() < expected {
+                return Err(::binparse::ParseError::NotEnoughData {
+                    expected,
+                    got: self.data.len(),
+                });
+            }
+        }
+        Ok(())
+    }
+    #[allow(dead_code)]
+    fn dst_recoverable_check(&self) -> Result<(), ::binparse::ParseError> {
+        Ok(())
+    }
+    #[allow(dead_code)]
+    fn length_present_node(&self) -> ::binparse::FieldNode<'a> {
+        let bit_range = self.length_bit_range();
+        ::binparse::FieldNode::new(
+            "length",
+            "u16",
+            bit_range.clone(),
+            ::binparse::Value::UInt(u128::from(self.length())),
+        )
+    }
+    #[allow(clippy::identity_op)]
+    pub fn length(&self) -> u16 {
+        u16::from_be_bytes(self.data[4usize..6usize].try_into().unwrap())
+    }
+    pub fn length_end_offset(&self) -> binparse::Len {
+        binparse::Len {
+            byte: 6usize,
+            bit: 0usize,
+        }
+    }
+    pub fn length_start_offset(&self) -> binparse::Len {
+        self.dst_end_offset()
+    }
+    pub fn length_bit_range(&self) -> ::core::ops::Range<usize> {
+        self.length_start_offset().bits()..self.length_end_offset().bits()
+    }
+    #[allow(dead_code)]
+    fn length_fatal_check(&self) -> Result<(), ::binparse::ParseError> {
+        {
+            let len = self.length_end_offset();
+            let expected = len.byte_ceil();
+            if self.data.len() < expected {
+                return Err(::binparse::ParseError::NotEnoughData {
+                    expected,
+                    got: self.data.len(),
+                });
+            }
+        }
+        Ok(())
+    }
+    #[allow(dead_code)]
+    fn length_recoverable_check(&self) -> Result<(), ::binparse::ParseError> {
+        Ok(())
+    }
+    #[allow(dead_code)]
+    fn checksum_present_node(&self) -> ::binparse::FieldNode<'a> {
+        let bit_range = self.checksum_bit_range();
+        ::binparse::FieldNode::new(
+            "checksum",
+            "u16",
+            bit_range.clone(),
+            ::binparse::Value::UInt(u128::from(self.checksum())),
+        )
+    }
+    #[allow(clippy::identity_op)]
+    pub fn checksum(&self) -> u16 {
+        u16::from_be_bytes(self.data[6usize..8usize].try_into().unwrap())
+    }
+    pub fn checksum_end_offset(&self) -> binparse::Len {
+        binparse::Len {
+            byte: 8usize,
+            bit: 0usize,
+        }
+    }
+    pub fn checksum_start_offset(&self) -> binparse::Len {
+        self.length_end_offset()
+    }
+    pub fn checksum_bit_range(&self) -> ::core::ops::Range<usize> {
+        self.checksum_start_offset().bits()..self.checksum_end_offset().bits()
+    }
+    #[allow(dead_code)]
+    fn checksum_fatal_check(&self) -> Result<(), ::binparse::ParseError> {
+        {
+            let len = self.checksum_end_offset();
+            let expected = len.byte_ceil();
+            if self.data.len() < expected {
+                return Err(::binparse::ParseError::NotEnoughData {
+                    expected,
+                    got: self.data.len(),
+                });
+            }
+        }
+        Ok(())
+    }
+    #[allow(dead_code)]
+    fn checksum_recoverable_check(&self) -> Result<(), ::binparse::ParseError> {
+        Ok(())
+    }
+    #[allow(dead_code)]
+    fn payload_present_node(&self) -> ::binparse::FieldNode<'a> {
+        let bit_range = self.payload_bit_range();
+        {
+            let mut elem_nodes = ::std::vec::Vec::new();
+            if let Ok(iter) = self.payload() {
+                let mut start = bit_range.start;
+                for (i, elem) in iter.enumerate() {
+                    let end = start.saturating_add(8usize);
+                    match elem {
+                        Ok(value) => {
+                            elem_nodes
+                                .push(
+                                    ::binparse::FieldNode::new(
+                                        i.to_string(),
+                                        "u8",
+                                        start..end,
+                                        ::binparse::Value::UInt(u128::from(value)),
+                                    ),
+                                )
+                        }
+                        Err(error) => {
+                            elem_nodes
+                                .push(
+                                    ::binparse::FieldNode::new(
+                                            i.to_string(),
+                                            "u8",
+                                            start..start,
+                                            ::binparse::Value::Opaque,
+                                        )
+                                        .with_status(::binparse::Status::Error(error)),
+                                );
+                        }
+                    }
+                    start = end;
+                }
+            }
+            ::binparse::FieldNode::new(
+                    "payload",
+                    "[u8]",
+                    bit_range.clone(),
+                    ::binparse::Value::Array,
+                )
+                .with_children(elem_nodes)
+        }
+    }
+    #[allow(clippy::identity_op)]
+    pub fn payload(&self) -> ::binparse::ParseResult<Udp_payload_Iterator<'a>> {
+        Ok(Udp_payload_Iterator {
+            idx: 0,
+            count: (self.length() as usize).saturating_sub(8usize),
+            data: &self.data[8usize..],
+        })
+    }
+    pub fn payload_end_offset(&self) -> binparse::Len {
+        ::binparse::Len {
+            byte: 8usize,
+            bit: 0usize,
+        }
+            + ({
+                ::binparse::Len {
+                    byte: 1usize,
+                    bit: 0usize,
+                } * ((self.length() as usize).saturating_sub(8usize))
+            })
+    }
+    pub fn payload_start_offset(&self) -> binparse::Len {
+        self.checksum_end_offset()
+    }
+    pub fn payload_bit_range(&self) -> ::core::ops::Range<usize> {
+        self.payload_start_offset().bits()..self.payload_end_offset().bits()
+    }
+    #[allow(dead_code)]
+    fn payload_fatal_check(&self) -> Result<(), ::binparse::ParseError> {
+        {
+            let len = self.payload_end_offset();
+            let expected = len.byte_ceil();
+            if self.data.len() < expected {
+                return Err(::binparse::ParseError::NotEnoughData {
+                    expected,
+                    got: self.data.len(),
+                });
+            }
+        }
+        Ok(())
+    }
+    #[allow(dead_code)]
+    fn payload_recoverable_check(&self) -> Result<(), ::binparse::ParseError> {
+        Ok(())
+    }
+}
+
+impl<'a> UdpWriter<'a> {
+    pub fn encoded_len(lens: &UdpLens) -> usize {
+        8usize + lens.payload
+    }
+    pub fn new(data: &'a mut [u8], lens: UdpLens) -> ::binparse::WriteResult<Self> {
+        let need = Self::encoded_len(&lens);
+        if data.len() < need {
+            return Err(::binparse::WriteError::NotEnoughSpace {
+                expected: need,
+                got: data.len(),
+            });
+        }
+        if (lens.payload).saturating_add(8usize) > (u16::MAX as usize) {
+            return Err(::binparse::WriteError::ValueTooLarge {
+                field: "Udp.length",
+                value: (lens.payload).saturating_add(8usize),
+                max: u16::MAX as usize,
+            });
+        }
+        let mut me = Self { data, lens };
+        me.write_len();
+        Ok(me)
+    }
+    fn write_len(&mut self) {
+        self.data[4usize..6usize]
+            .copy_from_slice(
+                &((self.lens.payload).saturating_add(8usize) as u16).to_be_bytes(),
+            );
+    }
+    pub fn set_src(&mut self, value: u16) -> &mut Self {
+        self.data[0usize..2usize].copy_from_slice(&value.to_be_bytes());
+        self
+    }
+    pub fn set_dst(&mut self, value: u16) -> &mut Self {
+        self.data[2usize..4usize].copy_from_slice(&value.to_be_bytes());
+        self
+    }
+    pub fn set_checksum(&mut self, value: u16) -> &mut Self {
+        self.data[6usize..8usize].copy_from_slice(&value.to_be_bytes());
+        self
+    }
+    pub fn payload_mut(&mut self) -> &mut [u8] {
+        let off = 8usize;
+        &mut self.data[off..off + self.lens.payload]
+    }
+    pub fn write_into(
+        data: &'a mut [u8],
+        content: &UdpContent,
+    ) -> ::binparse::WriteResult<usize> {
+        let lens = UdpLens {
+            payload: content.payload.len(),
+        };
+        let need = Self::encoded_len(&lens);
+        let mut w = Self::new(data, lens)?;
+        w.set_src(content.src);
+        w.set_dst(content.dst);
+        w.set_checksum(content.checksum);
+        w.payload_mut().copy_from_slice(content.payload);
+        Ok(need)
+    }
+    pub fn to_vec(content: &UdpContent) -> ::std::vec::Vec<u8> {
+        let lens = UdpLens {
+            payload: content.payload.len(),
+        };
+        let mut buf = ::std::vec![0u8; Self::encoded_len(& lens)];
+        let _ = UdpWriter::write_into(&mut buf, content);
+        buf
+    }
+}
+
+pub struct Udp<'a> {
+    #[allow(dead_code)]
+    data: &'a [u8],
+}
+
+pub struct UdpContent<'a> {
+    pub src: u16,
+    pub dst: u16,
+    pub checksum: u16,
+    pub payload: &'a [u8],
+}
+
+pub struct UdpWriter<'a> {
+    data: &'a mut [u8],
+    lens: UdpLens,
+}
+

@@ -48,6 +48,13 @@ struct WriterField {
     bit_offset: usize,
 }
 
+#[derive(Clone, Copy)]
+enum LenAdjust {
+    None,
+    Add(usize),
+    Sub(usize),
+}
+
 struct DynamicTail {
     array_field: syn::Ident,
     array_offset: usize,
@@ -55,6 +62,7 @@ struct DynamicTail {
     len_primitive: ast::Primitive,
     len_offset: usize,
     len_endian: Endian,
+    len_adjust: LenAdjust,
 }
 
 struct DynamicTailHook {
@@ -93,6 +101,7 @@ struct ForwardLayout {
     len_primitive: ast::Primitive,
     len_offset: usize,
     len_endian: Endian,
+    len_adjust: LenAdjust,
     trailer_fields: Vec<WriterField>,
     trailer_prefix_size: usize,
 }
@@ -358,7 +367,15 @@ fn classify_forward(
 ) -> Option<ForwardLayout> {
     let mut prefix_fields = Vec::new();
     let mut bit_offset = 0usize;
-    let mut region: Option<(syn::Ident, String, ast::Primitive, usize, Endian, usize)> = None;
+    let mut region: Option<(
+        syn::Ident,
+        String,
+        ast::Primitive,
+        usize,
+        Endian,
+        LenAdjust,
+        usize,
+    )> = None;
     let mut trailer_fields = Vec::new();
     let mut trailer_bit_offset = 0usize;
 
@@ -381,12 +398,9 @@ fn classify_forward(
                     .ok()
                     .and_then(|lowered| lowered.const_value)
                     .is_none()
-                && let ast::Expr::Path(path) = size
-                && let [len_field_str] = path.as_slice()
+                && let Some((len_field_str, len_adjust)) = affine_size_shape(size)
             {
-                let len_field = prefix_fields
-                    .iter()
-                    .find(|f: &&WriterField| f.name == len_field_str)?;
+                let len_field = prefix_fields.iter().find(|f: &&WriterField| f.name == len_field_str)?;
                 let (len_primitive, len_endian) = match &len_field.kind {
                     FieldKind::Primitive { primitive, endian }
                         if !crate::is_signed(primitive) =>
@@ -397,10 +411,11 @@ fn classify_forward(
                 };
                 region = Some((
                     format_ident!("{}", field.name),
-                    (*len_field_str).to_string(),
+                    len_field_str.to_string(),
                     len_primitive,
                     len_field.bit_offset / 8,
                     len_endian,
+                    len_adjust,
                     bit_offset / 8,
                 ));
                 continue;
@@ -418,8 +433,15 @@ fn classify_forward(
         }
     }
 
-    let (region_field, len_field_str, len_primitive, len_offset, len_endian, region_offset) =
-        region?;
+    let (
+        region_field,
+        len_field_str,
+        len_primitive,
+        len_offset,
+        len_endian,
+        len_adjust,
+        region_offset,
+    ) = region?;
 
     if trailer_fields.is_empty() {
         return None;
@@ -436,6 +458,7 @@ fn classify_forward(
         len_primitive,
         len_offset,
         len_endian,
+        len_adjust,
         trailer_fields,
         trailer_prefix_size: trailer_bit_offset / 8,
     })
@@ -648,12 +671,7 @@ fn classify_dynamic_tail(
     array_bit_offset: usize,
     fields: &[WriterField],
 ) -> Option<DynamicTail> {
-    let ast::Expr::Path(path) = size else {
-        return None;
-    };
-    let [len_field_str] = path.as_slice() else {
-        return None;
-    };
+    let (len_field_str, len_adjust) = affine_size_shape(size)?;
     let len_field = fields.iter().find(|f| f.name == len_field_str)?;
     let (len_primitive, len_endian) = match &len_field.kind {
         FieldKind::Primitive { primitive, endian } if !crate::is_signed(primitive) => {
@@ -664,11 +682,52 @@ fn classify_dynamic_tail(
     Some(DynamicTail {
         array_field: format_ident!("{}", array_name),
         array_offset: array_bit_offset / 8,
-        len_field_str: (*len_field_str).to_string(),
+        len_field_str: len_field_str.to_string(),
         len_primitive,
         len_offset: len_field.bit_offset / 8,
         len_endian,
+        len_adjust,
     })
+}
+
+fn affine_size_shape<'a>(size: &'a ast::Expr<'a>) -> Option<(&'a str, LenAdjust)> {
+    match size {
+        ast::Expr::Path(path) => {
+            let [len_field_str] = path.as_slice() else {
+                return None;
+            };
+            Some((len_field_str, LenAdjust::None))
+        }
+        ast::Expr::Binary(binary) => {
+            let op = match binary.op {
+                ast::BinaryOp::Numeric(ast::NumericBinaryOp::Add) => LenAdjust::Sub,
+                ast::BinaryOp::Numeric(ast::NumericBinaryOp::Sub) => LenAdjust::Add,
+                _ => return None,
+            };
+            let ast::Expr::Path(path) = &binary.lhs else {
+                return None;
+            };
+            let [len_field_str] = path.as_slice() else {
+                return None;
+            };
+            let ast::Expr::Literal(ast::Literal::Int(int_lit)) = &binary.rhs else {
+                return None;
+            };
+            if int_lit.value == 0 {
+                return Some((len_field_str, LenAdjust::None));
+            }
+            Some((len_field_str, op(int_lit.value)))
+        }
+        _ => None,
+    }
+}
+
+fn len_value_expr(region_len: &TokenStream, adjust: LenAdjust) -> TokenStream {
+    match adjust {
+        LenAdjust::None => quote! { #region_len },
+        LenAdjust::Add(k) => quote! { (#region_len).saturating_add(#k) },
+        LenAdjust::Sub(k) => quote! { (#region_len).saturating_sub(#k) },
+    }
 }
 
 fn size_path_matches(size: &ast::Expr<'_>, name: &str) -> bool {
@@ -941,6 +1000,8 @@ fn emit_dynamic_tail(name: &str, fields: &[WriterField], tail: &DynamicTail) -> 
 
     let len_ty = crate::match_primitive(&tail.len_primitive).1;
     let len_field_qualified = format!("{}.{}", name, tail.len_field_str);
+    let len_value = len_value_expr(&quote! { self.lens.#array_field }, tail.len_adjust);
+    let len_value_param = len_value_expr(&quote! { lens.#array_field }, tail.len_adjust);
 
     let write_len = {
         let len_offset = tail.len_offset;
@@ -948,7 +1009,7 @@ fn emit_dynamic_tail(name: &str, fields: &[WriterField], tail: &DynamicTail) -> 
         if single_byte.is_some() {
             quote! {
                 fn write_len(&mut self) {
-                    self.data[#len_offset] = self.lens.#array_field as #len_ty;
+                    self.data[#len_offset] = #len_value as #len_ty;
                 }
             }
         } else {
@@ -961,7 +1022,7 @@ fn emit_dynamic_tail(name: &str, fields: &[WriterField], tail: &DynamicTail) -> 
             quote! {
                 fn write_len(&mut self) {
                     self.data[#len_offset..#end]
-                        .copy_from_slice(&(self.lens.#array_field as #len_ty).#to_bytes());
+                        .copy_from_slice(&(#len_value as #len_ty).#to_bytes());
                 }
             }
         }
@@ -1065,10 +1126,10 @@ fn emit_dynamic_tail(name: &str, fields: &[WriterField], tail: &DynamicTail) -> 
                         got: data.len(),
                     });
                 }
-                if lens.#array_field > (#len_ty::MAX as usize) {
+                if #len_value_param > (#len_ty::MAX as usize) {
                     return Err(::binparse::WriteError::ValueTooLarge {
                         field: #len_field_qualified,
-                        value: lens.#array_field,
+                        value: #len_value_param,
                         max: #len_ty::MAX as usize,
                     });
                 }
@@ -1576,6 +1637,8 @@ fn emit_forward(name: &str, layout: &ForwardLayout) -> TokenStream {
 
     let len_ty = crate::match_primitive(&layout.len_primitive).1;
     let len_field_qualified = format!("{}.{}", name, layout.len_field_str);
+    let len_value = len_value_expr(&quote! { self.lens.#region_field }, layout.len_adjust);
+    let len_value_param = len_value_expr(&quote! { lens.#region_field }, layout.len_adjust);
 
     let write_len = {
         let len_offset = layout.len_offset;
@@ -1583,7 +1646,7 @@ fn emit_forward(name: &str, layout: &ForwardLayout) -> TokenStream {
         if single_byte.is_some() {
             quote! {
                 fn write_len(&mut self) {
-                    self.data[#len_offset] = self.lens.#region_field as #len_ty;
+                    self.data[#len_offset] = #len_value as #len_ty;
                 }
             }
         } else {
@@ -1596,7 +1659,7 @@ fn emit_forward(name: &str, layout: &ForwardLayout) -> TokenStream {
             quote! {
                 fn write_len(&mut self) {
                     self.data[#len_offset..#end]
-                        .copy_from_slice(&(self.lens.#region_field as #len_ty).#to_bytes());
+                        .copy_from_slice(&(#len_value as #len_ty).#to_bytes());
                 }
             }
         }
@@ -1805,10 +1868,10 @@ fn emit_forward(name: &str, layout: &ForwardLayout) -> TokenStream {
                         got: data.len(),
                     });
                 }
-                if lens.#region_field > (#len_ty::MAX as usize) {
+                if #len_value_param > (#len_ty::MAX as usize) {
                     return Err(::binparse::WriteError::ValueTooLarge {
                         field: #len_field_qualified,
-                        value: lens.#region_field,
+                        value: #len_value_param,
                         max: #len_ty::MAX as usize,
                     });
                 }

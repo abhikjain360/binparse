@@ -777,3 +777,169 @@ struct Msg {
     "#;
     run_round_trip("dynamic-region-array-trailer", dsl, test_body);
 }
+
+#[test]
+fn generated_writer_affine_len_minus_const_round_trips() {
+    let dsl = r#"
+@endian(big)
+struct Udp {
+    src: u16,
+    dst: u16,
+    length: u16,
+    checksum: u16,
+    payload: [u8; length - 8],
+}
+"#;
+    let test_body = r#"
+        let content = UdpContent {
+            src: 0x1234,
+            dst: 0x5678,
+            checksum: 0xBEEF,
+            payload: b"hello",
+        };
+        let lens = UdpLens { payload: 5 };
+        assert_eq!(UdpWriter::encoded_len(&lens), 13);
+
+        let bytes = UdpWriter::to_vec(&content);
+        assert_eq!(bytes.len(), 13);
+        assert_eq!(
+            bytes,
+            vec![0x12, 0x34, 0x56, 0x78, 0x00, 0x0D, 0xBE, 0xEF, b'h', b'e', b'l', b'l', b'o']
+        );
+
+        let (udp, rem) = Udp::parse(&bytes).unwrap();
+        assert!(rem.is_empty());
+        assert_eq!(udp.src(), 0x1234);
+        assert_eq!(udp.dst(), 0x5678);
+        assert_eq!(udp.checksum(), 0xBEEF);
+        // derived length field inverts the size expr: length == payload.len() + 8
+        assert_eq!(udp.length(), 13);
+        assert_eq!(
+            udp.payload().unwrap().collect::<Result<Vec<u8>, _>>().unwrap(),
+            b"hello".to_vec()
+        );
+
+        // empty payload: length == 8 (the minimum, == k)
+        let empty = UdpContent { src: 1, dst: 2, checksum: 3, payload: b"" };
+        let bytes = UdpWriter::to_vec(&empty);
+        assert_eq!(bytes.len(), 8);
+        let (udp, _) = Udp::parse(&bytes).unwrap();
+        assert_eq!(udp.length(), 8);
+        assert_eq!(
+            udp.payload().unwrap().collect::<Result<Vec<u8>, _>>().unwrap(),
+            Vec::<u8>::new()
+        );
+
+        // Mode 1 random access keeps the same derived length.
+        let lens = UdpLens { payload: 5 };
+        let mut buf = vec![0u8; UdpWriter::encoded_len(&lens)];
+        let mut w = UdpWriter::new(&mut buf, lens).unwrap();
+        w.set_src(0x1234);
+        w.set_dst(0x5678);
+        w.set_checksum(0xBEEF);
+        w.payload_mut().copy_from_slice(b"world");
+        let (udp, _) = Udp::parse(&buf).unwrap();
+        assert_eq!(udp.length(), 13);
+        assert_eq!(
+            udp.payload().unwrap().collect::<Result<Vec<u8>, _>>().unwrap(),
+            b"world".to_vec()
+        );
+
+        // ValueTooLarge edge: the WRITTEN length (payload + 8) overflows u16.
+        let mut big = vec![0u8; 70000];
+        assert!(matches!(
+            UdpWriter::new(&mut big, UdpLens { payload: 65534 }),
+            Err(binparse::WriteError::ValueTooLarge { .. })
+        ));
+        // payload that fits exactly: 65535 - 8 = 65527 is the largest legal payload.
+        let lens = UdpLens { payload: 65528 };
+        let mut buf = vec![0u8; UdpWriter::encoded_len(&lens)];
+        assert!(matches!(
+            UdpWriter::new(&mut buf, lens),
+            Err(binparse::WriteError::ValueTooLarge { .. })
+        ));
+    "#;
+    run_round_trip("affine-len-minus-const", dsl, test_body);
+}
+
+#[test]
+fn generated_writer_affine_len_minus_const_with_trailer_round_trips() {
+    let dsl = r#"
+@endian(big)
+struct Frame {
+    kind: u8,
+    total: u16,
+    payload: [u8; total - 5],
+    crc: u16,
+}
+"#;
+    let test_body = r#"
+        let content = FrameContent {
+            kind: 0x09,
+            payload: b"abc",
+            crc: 0xDEAD,
+        };
+        let lens = FrameLens { payload: 3 };
+        // 1 (kind) + 2 (total) + 3 (payload) + 2 (crc) = 8
+        assert_eq!(FrameWriter::encoded_len(&lens), 8);
+
+        let bytes = FrameWriter::to_vec(&content);
+        assert_eq!(
+            bytes,
+            vec![0x09, 0x00, 0x08, b'a', b'b', b'c', 0xDE, 0xAD]
+        );
+
+        let (frame, rem) = Frame::parse(&bytes).unwrap();
+        assert!(rem.is_empty());
+        assert_eq!(frame.kind(), 0x09);
+        // derived: total == payload.len() + 5
+        assert_eq!(frame.total(), 8);
+        assert_eq!(
+            frame.payload().unwrap().collect::<Result<Vec<u8>, _>>().unwrap(),
+            b"abc".to_vec()
+        );
+        assert_eq!(frame.crc(), 0xDEAD);
+    "#;
+    run_round_trip("affine-len-minus-const-trailer", dsl, test_body);
+}
+
+#[test]
+fn generated_writer_affine_len_plus_const_round_trips() {
+    let dsl = r#"
+struct Frame {
+    kind: u8,
+    len: u8,
+    payload: [u8; len + 2],
+}
+"#;
+    let test_body = r#"
+        let content = FrameContent { kind: 0x02, payload: b"hello" };
+        let lens = FrameLens { payload: 5 };
+        assert_eq!(FrameWriter::encoded_len(&lens), 7);
+
+        let bytes = FrameWriter::to_vec(&content);
+        // derived: len == payload.len() - 2 == 3
+        assert_eq!(bytes, vec![0x02, 0x03, b'h', b'e', b'l', b'l', b'o']);
+
+        let (frame, _) = Frame::parse(&bytes).unwrap();
+        assert_eq!(frame.kind(), 0x02);
+        assert_eq!(frame.len(), 3);
+        assert_eq!(
+            frame.payload().unwrap().collect::<Result<Vec<u8>, _>>().unwrap(),
+            b"hello".to_vec()
+        );
+
+        // underflow edge: a payload smaller than k saturates the derived len to 0,
+        // which the reader then sees as a 2-byte region (len + 2).
+        let small = FrameContent { kind: 0x01, payload: b"xy" };
+        let bytes = FrameWriter::to_vec(&small);
+        assert_eq!(bytes, vec![0x01, 0x00, b'x', b'y']);
+        let (frame, _) = Frame::parse(&bytes).unwrap();
+        assert_eq!(frame.len(), 0);
+        assert_eq!(
+            frame.payload().unwrap().collect::<Result<Vec<u8>, _>>().unwrap(),
+            b"xy".to_vec()
+        );
+    "#;
+    run_round_trip("affine-len-plus-const", dsl, test_body);
+}

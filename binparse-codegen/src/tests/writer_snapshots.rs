@@ -65,6 +65,14 @@ fn writer_dynamic_tail() {
 }
 
 #[test]
+fn writer_affine_dynamic_tail() {
+    assert_generated_writers_eq(
+        r#"@endian(big) struct Udp { src: u16, dst: u16, length: u16, checksum: u16, payload: [u8; length - 8] }"#,
+        "writer_affine_dynamic_tail",
+    );
+}
+
+#[test]
 fn writer_dynamic_region_with_trailer() {
     assert_generated_writers_eq(
         r#"@endian(big) struct Frame { kind: u8, len: u8, payload: [u8; len], crc: u16, tail: u8 }"#,
