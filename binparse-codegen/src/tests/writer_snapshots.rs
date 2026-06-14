@@ -93,6 +93,30 @@ fn writer_varint_hook_tail() {
 }
 
 #[test]
+fn writer_len_region_struct_ref() {
+    assert_generated_writers_eq(
+        r#"@endian(big) struct Inner { a: u8, b: u16 } @endian(big) struct Tlv { tag: u8, length: u8, @len(length) value: Inner, crc: u16 }"#,
+        "writer_len_region_struct_ref",
+    );
+}
+
+#[test]
+fn writer_len_region_union() {
+    assert_generated_writers_eq(
+        r#"@endian(big) struct Packet {
+            kind: u8,
+            length: u8,
+            @len(length) body: union(kind) {
+                1 => Connect { keep_alive: u16 },
+                2 => Connack { ack: u8, code: u8 },
+                _ => Unknown { },
+            },
+        }"#,
+        "writer_len_region_union",
+    );
+}
+
+#[test]
 fn writer_union() {
     assert_generated_writers_eq(
         r#"@endian(big) struct Packet {

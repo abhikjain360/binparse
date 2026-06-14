@@ -93,10 +93,30 @@ struct UnionLayout {
     variants: Vec<UnionVariantInfo>,
 }
 
+struct LenUnionLayout {
+    union: UnionLayout,
+    region_offset: usize,
+    len_field_str: String,
+    len_primitive: ast::Primitive,
+    len_offset: usize,
+    len_endian: Endian,
+    len_adjust: LenAdjust,
+}
+
+enum RegionKind {
+    Bytes,
+    StructRef {
+        child_writer: syn::Ident,
+        child_content: syn::Ident,
+        size: usize,
+    },
+}
+
 struct ForwardLayout {
     prefix_fields: Vec<WriterField>,
     region_field: syn::Ident,
     region_offset: usize,
+    region_kind: RegionKind,
     len_field_str: String,
     len_primitive: ast::Primitive,
     len_offset: usize,
@@ -113,6 +133,7 @@ enum Layout {
     DynamicTailOpen { fields: Vec<WriterField>, tail: DynamicTailOpen },
     Union(UnionLayout),
     Forward(ForwardLayout),
+    LenUnion(LenUnionLayout),
 }
 
 pub(crate) fn generate(
@@ -132,6 +153,7 @@ pub(crate) fn generate(
         }
         Some(Layout::Union(layout)) => (emit_union(ast.name, &layout), None),
         Some(Layout::Forward(layout)) => (emit_forward(ast.name, &layout), None),
+        Some(Layout::LenUnion(layout)) => (emit_len_union(ast.name, &layout), None),
         None => (TokenStream::new(), None),
     })
 }
@@ -155,6 +177,10 @@ fn classify(
 
     if let Some(layout) = classify_forward(ast, struct_inherited, writer_sizes) {
         return Ok(Some(Layout::Forward(layout)));
+    }
+
+    if let Some(layout) = classify_len_union(ast, struct_inherited, writer_sizes)? {
+        return Ok(Some(Layout::LenUnion(layout)));
     }
 
     let mut fields = Vec::with_capacity(ast.items.len());
@@ -360,6 +386,17 @@ fn classify(
     Ok(Some(Layout::Fixed { fields }))
 }
 
+struct ForwardRegion {
+    region_field: syn::Ident,
+    region_kind: RegionKind,
+    len_field_str: String,
+    len_primitive: ast::Primitive,
+    len_offset: usize,
+    len_endian: Endian,
+    len_adjust: LenAdjust,
+    region_offset: usize,
+}
+
 fn classify_forward(
     ast: &ast::Struct,
     struct_inherited: Inherited,
@@ -367,15 +404,7 @@ fn classify_forward(
 ) -> Option<ForwardLayout> {
     let mut prefix_fields = Vec::new();
     let mut bit_offset = 0usize;
-    let mut region: Option<(
-        syn::Ident,
-        String,
-        ast::Primitive,
-        usize,
-        Endian,
-        LenAdjust,
-        usize,
-    )> = None;
+    let mut region: Option<ForwardRegion> = None;
     let mut trailer_fields = Vec::new();
     let mut trailer_bit_offset = 0usize;
 
@@ -401,23 +430,43 @@ fn classify_forward(
                 && let Some((len_field_str, len_adjust)) = affine_size_shape(size)
             {
                 let len_field = prefix_fields.iter().find(|f: &&WriterField| f.name == len_field_str)?;
-                let (len_primitive, len_endian) = match &len_field.kind {
-                    FieldKind::Primitive { primitive, endian }
-                        if !crate::is_signed(primitive) =>
-                    {
-                        (*primitive, *endian)
-                    }
-                    _ => return None,
-                };
-                region = Some((
-                    format_ident!("{}", field.name),
-                    len_field_str.to_string(),
+                let (len_primitive, len_endian) = forward_len_field(len_field)?;
+                region = Some(ForwardRegion {
+                    region_field: format_ident!("{}", field.name),
+                    region_kind: RegionKind::Bytes,
+                    len_field_str: len_field_str.to_string(),
                     len_primitive,
-                    len_field.bit_offset / 8,
+                    len_offset: len_field.bit_offset / 8,
                     len_endian,
                     len_adjust,
-                    bit_offset / 8,
-                ));
+                    region_offset: bit_offset / 8,
+                });
+                continue;
+            }
+
+            if let ast::FieldValue::Type(ast::Type::StructRef(child_name)) = &field.value
+                && bit_offset.is_multiple_of(8)
+                && let Some(len_expr) = &field_attrs.len
+                && len_only_attr_supported(&field_attrs)
+                && let Some((len_field_str, len_adjust)) = affine_size_shape(len_expr)
+                && let Some(size) = writer_sizes.get(child_name).copied()
+            {
+                let len_field = prefix_fields.iter().find(|f: &&WriterField| f.name == len_field_str)?;
+                let (len_primitive, len_endian) = forward_len_field(len_field)?;
+                region = Some(ForwardRegion {
+                    region_field: format_ident!("{}", field.name),
+                    region_kind: RegionKind::StructRef {
+                        child_writer: format_ident!("{}Writer", child_name),
+                        child_content: format_ident!("{}Content", child_name),
+                        size,
+                    },
+                    len_field_str: len_field_str.to_string(),
+                    len_primitive,
+                    len_offset: len_field.bit_offset / 8,
+                    len_endian,
+                    len_adjust,
+                    region_offset: bit_offset / 8,
+                });
                 continue;
             }
 
@@ -433,17 +482,9 @@ fn classify_forward(
         }
     }
 
-    let (
-        region_field,
-        len_field_str,
-        len_primitive,
-        len_offset,
-        len_endian,
-        len_adjust,
-        region_offset,
-    ) = region?;
+    let region = region?;
 
-    if trailer_fields.is_empty() {
+    if matches!(region.region_kind, RegionKind::Bytes) && trailer_fields.is_empty() {
         return None;
     }
     if !bit_offset.is_multiple_of(8) || !trailer_bit_offset.is_multiple_of(8) {
@@ -452,16 +493,57 @@ fn classify_forward(
 
     Some(ForwardLayout {
         prefix_fields,
-        region_field,
-        region_offset,
-        len_field_str,
-        len_primitive,
-        len_offset,
-        len_endian,
-        len_adjust,
+        region_field: region.region_field,
+        region_offset: region.region_offset,
+        region_kind: region.region_kind,
+        len_field_str: region.len_field_str,
+        len_primitive: region.len_primitive,
+        len_offset: region.len_offset,
+        len_endian: region.len_endian,
+        len_adjust: region.len_adjust,
         trailer_fields,
         trailer_prefix_size: trailer_bit_offset / 8,
     })
+}
+
+fn forward_len_field(len_field: &WriterField) -> Option<(ast::Primitive, Endian)> {
+    match &len_field.kind {
+        FieldKind::Primitive { primitive, endian } if !crate::is_signed(primitive) => {
+            Some((*primitive, *endian))
+        }
+        _ => None,
+    }
+}
+
+fn len_only_attr_supported(attrs: &ParsedAttrs<'_>) -> bool {
+    let ParsedAttrs {
+        endian: _,
+        bit_order,
+        hook,
+        check: _,
+        range: _,
+        until,
+        greedy,
+        max_iter,
+        skip,
+        pad,
+        pad_to,
+        align,
+        len: _,
+        discriminator: _,
+        payload: _,
+        cache_len: _,
+        cache_value: _,
+    } = attrs;
+    bit_order.is_none()
+        && hook.is_none()
+        && until.is_none()
+        && !greedy
+        && max_iter.is_none()
+        && !skip
+        && pad.is_none()
+        && pad_to.is_none()
+        && align.is_none()
 }
 
 fn classify_fixed_field(
@@ -584,20 +666,18 @@ fn classify_fixed_items(
     Some(fields)
 }
 
-fn classify_union(
+fn build_union_layout(
     union: &ast::Union<'_>,
     field_name: &str,
     prefix_fields: Vec<WriterField>,
     bit_offset: usize,
     struct_inherited: Inherited,
     writer_sizes: &HashMap<&str, usize>,
-) -> Result<Option<Layout>, Error> {
+) -> Option<UnionLayout> {
     let [disc_name] = union.args.as_slice() else {
-        return Ok(None);
+        return None;
     };
-    let Some(disc) = prefix_fields.iter().find(|f| f.name == disc_name) else {
-        return Ok(None);
-    };
+    let disc = prefix_fields.iter().find(|f| f.name == disc_name)?;
     let disc = match &disc.kind {
         FieldKind::Primitive { primitive, endian } => WriterField {
             name: disc.name.clone(),
@@ -616,34 +696,31 @@ fn classify_union(
             bit_offset: disc.bit_offset,
         },
         FieldKind::ByteArray { .. } | FieldKind::StructRef { .. } | FieldKind::Constant { .. } => {
-            return Ok(None);
+            return None;
         }
     };
 
     let mut variants = Vec::with_capacity(union.variants.len());
     for variant in &union.variants {
         let [matcher] = variant.matchers.as_slice() else {
-            return Ok(None);
+            return None;
         };
         let disc_value = match matcher {
             ast::UnionMatcher::Literal(ast::Literal::Int(int_lit)) => {
                 proc_macro2::Literal::u128_unsuffixed(int_lit.value as u128)
             }
-            ast::UnionMatcher::Literal(_) | ast::UnionMatcher::Tuple(_) => return Ok(None),
+            ast::UnionMatcher::Literal(_) | ast::UnionMatcher::Tuple(_) => return None,
             ast::UnionMatcher::Wildcard => continue,
         };
         let inline = match &variant.body {
             ast::UnionBody::NamedInline(inline) => inline,
-            ast::UnionBody::Error(..) => return Ok(None),
+            ast::UnionBody::Error(..) => return None,
         };
         let variant_inherited = match ParsedAttrs::parse(&inline.attributes) {
             Ok(attrs) if struct_attrs_supported(&attrs) => attrs.merge_inherited(struct_inherited),
-            _ => return Ok(None),
+            _ => return None,
         };
-        let Some(fields) = classify_fixed_items(&inline.items, variant_inherited, writer_sizes)
-        else {
-            return Ok(None);
-        };
+        let fields = classify_fixed_items(&inline.items, variant_inherited, writer_sizes)?;
         variants.push(UnionVariantInfo {
             name: format_ident!("{}", inline.name),
             reader_variant: format_ident!("{}", inline.name),
@@ -653,16 +730,114 @@ fn classify_union(
     }
 
     if variants.is_empty() {
-        return Ok(None);
+        return None;
     }
 
-    Ok(Some(Layout::Union(UnionLayout {
+    Some(UnionLayout {
         field_name: field_name.to_string(),
         prefix_fields,
         disc,
         prefix_size: bit_offset / 8,
         variants,
-    })))
+    })
+}
+
+fn classify_union(
+    union: &ast::Union<'_>,
+    field_name: &str,
+    prefix_fields: Vec<WriterField>,
+    bit_offset: usize,
+    struct_inherited: Inherited,
+    writer_sizes: &HashMap<&str, usize>,
+) -> Result<Option<Layout>, Error> {
+    Ok(
+        build_union_layout(
+            union,
+            field_name,
+            prefix_fields,
+            bit_offset,
+            struct_inherited,
+            writer_sizes,
+        )
+        .map(Layout::Union),
+    )
+}
+
+fn classify_len_union(
+    ast: &ast::Struct,
+    struct_inherited: Inherited,
+    writer_sizes: &HashMap<&str, usize>,
+) -> Result<Option<LenUnionLayout>, Error> {
+    let mut prefix_fields = Vec::new();
+    let mut bit_offset = 0usize;
+    let Some(last_index) = ast.items.len().checked_sub(1) else {
+        return Ok(None);
+    };
+
+    for (index, item) in ast.items.iter().enumerate() {
+        let ast::StructItem::Field(field) = item else {
+            return Ok(None);
+        };
+        let Ok(field_attrs) = ParsedAttrs::parse(&field.attributes) else {
+            return Ok(None);
+        };
+
+        if let ast::FieldValue::Type(ast::Type::Union(union)) = &field.value {
+            if index != last_index {
+                return Ok(None);
+            }
+            if !bit_offset.is_multiple_of(8) {
+                return Ok(None);
+            }
+            let Some(len_expr) = &field_attrs.len else {
+                return Ok(None);
+            };
+            if !len_only_attr_supported(&field_attrs) {
+                return Ok(None);
+            }
+            let Some((len_field_str, len_adjust)) = affine_size_shape(len_expr) else {
+                return Ok(None);
+            };
+            let Some(len_field) = prefix_fields.iter().find(|f: &&WriterField| f.name == len_field_str)
+            else {
+                return Ok(None);
+            };
+            let Some((len_primitive, len_endian)) = forward_len_field(len_field) else {
+                return Ok(None);
+            };
+            let len_offset = len_field.bit_offset / 8;
+            let region_offset = bit_offset / 8;
+            let Some(union_layout) = build_union_layout(
+                union,
+                field.name,
+                prefix_fields,
+                bit_offset,
+                struct_inherited,
+                writer_sizes,
+            ) else {
+                return Ok(None);
+            };
+            return Ok(Some(LenUnionLayout {
+                union: union_layout,
+                region_offset,
+                len_field_str: len_field_str.to_string(),
+                len_primitive,
+                len_offset,
+                len_endian,
+                len_adjust,
+            }));
+        }
+
+        let Some((writer_field, width)) =
+            classify_fixed_field(field, bit_offset, struct_inherited, writer_sizes)
+        else {
+            return Ok(None);
+        };
+        prefix_fields.push(writer_field);
+        bit_offset += width;
+    }
+
+    Ok(None)
 }
 
 fn classify_dynamic_tail(
@@ -1625,6 +1800,224 @@ fn emit_union(name: &str, layout: &UnionLayout) -> TokenStream {
     }
 }
 
+fn emit_len_union(name: &str, layout: &LenUnionLayout) -> TokenStream {
+    let union = &layout.union;
+    let writer_name = format_ident!("{}Writer", name);
+    let content_name = format_ident!("{}Content", name);
+    let field_pascal = to_pascal_case(&union.field_name);
+    let body_enum = format_ident!("{}{}Content", name, field_pascal);
+    let body_field = format_ident!("{}", union.field_name);
+
+    let prefix_size = union.prefix_size;
+    let region_offset = layout.region_offset;
+    let disc_name = &union.disc.name;
+    let len_field_str = &layout.len_field_str;
+    let len_ty = crate::match_primitive(&layout.len_primitive).1;
+    let len_field_qualified = format!("{}.{}", name, len_field_str);
+
+    let mut variant_entities = TokenStream::new();
+    for variant in &union.variants {
+        let (tokens, _) = emit_fixed(&variant.name.to_string(), &variant.fields);
+        variant_entities.extend(tokens);
+    }
+
+    let enum_variants = union.variants.iter().map(|variant| {
+        let reader_variant = &variant.reader_variant;
+        let variant_content = format_ident!("{}Content", variant.name);
+        quote! { #reader_variant(#variant_content) }
+    });
+
+    let prefix_setters = union
+        .prefix_fields
+        .iter()
+        .filter(|field| {
+            field.name != *disc_name
+                && field.name != *len_field_str
+                && !matches!(field.kind, FieldKind::Constant { .. })
+        })
+        .map(|field| match &field.kind {
+            FieldKind::ByteArray { len } => {
+                let accessor_name = format_ident!("{}_mut", field.name);
+                let offset = field.bit_offset / 8;
+                let end = offset + len;
+                quote! {
+                    fn #accessor_name(&mut self) -> &mut [u8] {
+                        &mut self.data[#offset..#end]
+                    }
+                }
+            }
+            FieldKind::StructRef { name: child_writer, size } => {
+                let accessor_name = format_ident!("{}_mut", field.name);
+                let offset = field.bit_offset / 8;
+                let end = offset + size;
+                quote! {
+                    fn #accessor_name(&mut self) -> #child_writer<'_> {
+                        #child_writer { data: &mut self.data[#offset..#end] }
+                    }
+                }
+            }
+            FieldKind::Primitive { .. } | FieldKind::BitField { .. } => {
+                let setter_name = format_ident!("set_{}", field.name);
+                let ty = field_type(field);
+                let body = setter_body(field);
+                quote! {
+                    fn #setter_name(&mut self, value: #ty) -> &mut Self {
+                        #body
+                        self
+                    }
+                }
+            }
+            FieldKind::Constant { .. } => unreachable!(),
+        });
+
+    let prefix_write_calls = union
+        .prefix_fields
+        .iter()
+        .filter(|field| field.name != *disc_name && field.name != *len_field_str)
+        .map(|field| {
+            let field_name = &field.name;
+            match &field.kind {
+                FieldKind::ByteArray { .. } => {
+                    let accessor_name = format_ident!("{}_mut", field.name);
+                    quote! { w.#accessor_name().copy_from_slice(&content.#field_name); }
+                }
+                FieldKind::StructRef { name: child_writer, size } => {
+                    let offset = field.bit_offset / 8;
+                    let end = offset + size;
+                    quote! { #child_writer::write_into(&mut w.data[#offset..#end], &content.#field_name)?; }
+                }
+                FieldKind::Primitive { .. } | FieldKind::BitField { .. } => {
+                    let setter_name = format_ident!("set_{}", field.name);
+                    quote! { w.#setter_name(content.#field_name); }
+                }
+                FieldKind::Constant { .. } => constant_write_call(field, &quote! { w.data }),
+            }
+        });
+
+    let content_fields = union
+        .prefix_fields
+        .iter()
+        .filter(|field| {
+            field.name != *disc_name
+                && field.name != *len_field_str
+                && !matches!(field.kind, FieldKind::Constant { .. })
+        })
+        .map(|field| {
+            let field_name = &field.name;
+            let ty = field_type(field);
+            quote! { pub #field_name: #ty }
+        });
+
+    let encoded_len_arms = union.variants.iter().map(|variant| {
+        let reader_variant = &variant.reader_variant;
+        let variant_writer = format_ident!("{}Writer", variant.name);
+        quote! { #body_enum::#reader_variant(_) => #variant_writer::SIZE }
+    });
+
+    let disc_ty = field_type(&union.disc);
+    let disc_target = quote! { w.data };
+    let disc_body = setter_body_into(&union.disc, &disc_target);
+
+    let write_len = {
+        let len_offset = layout.len_offset;
+        let len_value = len_value_expr(&quote! { region_len }, layout.len_adjust);
+        let check = quote! {
+            let len_field_value = #len_value;
+            if len_field_value > (#len_ty::MAX as usize) {
+                return Err(::binparse::WriteError::ValueTooLarge {
+                    field: #len_field_qualified,
+                    value: len_field_value,
+                    max: #len_ty::MAX as usize,
+                });
+            }
+        };
+        let single_byte = crate::single_byte_read(&layout.len_primitive);
+        if single_byte.is_some() {
+            quote! {
+                #check
+                w.data[#len_offset] = len_field_value as #len_ty;
+            }
+        } else {
+            let (len, _) = crate::match_primitive(&layout.len_primitive);
+            let end = len_offset + len.byte;
+            let to_bytes = match layout.len_endian {
+                Endian::Big => quote! { to_be_bytes },
+                Endian::Little => quote! { to_le_bytes },
+            };
+            quote! {
+                #check
+                w.data[#len_offset..#end]
+                    .copy_from_slice(&(len_field_value as #len_ty).#to_bytes());
+            }
+        }
+    };
+
+    let write_arms = union.variants.iter().map(|variant| {
+        let reader_variant = &variant.reader_variant;
+        let variant_writer = format_ident!("{}Writer", variant.name);
+        let disc_value = &variant.disc_value;
+        quote! {
+            #body_enum::#reader_variant(c) => {
+                let value: #disc_ty = #disc_value;
+                #disc_body
+                let region_len = #variant_writer::SIZE;
+                #write_len
+                let end = #region_offset + region_len;
+                #variant_writer::write_into(&mut w.data[#region_offset..end], c)?;
+            }
+        }
+    });
+
+    quote! {
+        #variant_entities
+
+        pub enum #body_enum {
+            #(#enum_variants),*
+        }
+
+        pub struct #writer_name<'a> {
+            data: &'a mut [u8],
+        }
+
+        impl<'a> #writer_name<'a> {
+            pub fn encoded_len(content: &#content_name) -> usize {
+                #prefix_size + match &content.#body_field {
+                    #(#encoded_len_arms),*
+                }
+            }
+
+            #(#prefix_setters)*
+
+            pub fn write_into(data: &'a mut [u8], content: &#content_name) -> ::binparse::WriteResult<usize> {
+                let need = Self::encoded_len(content);
+                if data.len() < need {
+                    return Err(::binparse::WriteError::NotEnoughSpace {
+                        expected: need,
+                        got: data.len(),
+                    });
+                }
+                let mut w = Self { data };
+                #(#prefix_write_calls)*
+                match &content.#body_field {
+                    #(#write_arms)*
+                }
+                Ok(need)
+            }
+
+            pub fn to_vec(content: &#content_name) -> ::std::vec::Vec<u8> {
+                let mut buf = ::std::vec![0u8; Self::encoded_len(content)];
+                let _ = #writer_name::write_into(&mut buf, content);
+                buf
+            }
+        }
+
+        pub struct #content_name {
+            #(#content_fields,)*
+            pub #body_field: #body_enum,
+        }
+    }
+}
+
 fn emit_forward(name: &str, layout: &ForwardLayout) -> TokenStream {
     let writer_name = format_ident!("{}Writer", name);
     let content_name = format_ident!("{}Content", name);
@@ -1821,6 +2214,21 @@ fn emit_forward(name: &str, layout: &ForwardLayout) -> TokenStream {
         }
     });
 
+    let trailer_write_block = if layout.trailer_fields.is_empty() {
+        TokenStream::new()
+    } else {
+        quote! {
+            let trailer_base = #region_offset + w.lens.#region_field;
+            #(#trailer_write_calls)*
+        }
+    };
+
+    let encoded_len_body = if trailer_prefix_size == 0 {
+        quote! { #region_offset + lens.#region_field }
+    } else {
+        quote! { #region_offset + lens.#region_field + #trailer_prefix_size }
+    };
+
     let prefix_content_fields = layout
         .prefix_fields
         .iter()
@@ -1844,6 +2252,48 @@ fn emit_forward(name: &str, layout: &ForwardLayout) -> TokenStream {
             quote! { pub #field_name: #ty }
         });
 
+    let (
+        region_accessor,
+        region_lens_init,
+        region_write_call,
+        region_content_field,
+        content_lifetime,
+    ) = match &layout.region_kind {
+        RegionKind::Bytes => (
+            quote! {
+                pub fn #region_mut(&mut self) -> &mut [u8] {
+                    let off = #region_offset;
+                    &mut self.data[off..off + self.lens.#region_field]
+                }
+            },
+            quote! { #lens_name { #region_field: content.#region_field.len() } },
+            quote! { w.#region_mut().copy_from_slice(content.#region_field); },
+            quote! { pub #region_field: &'a [u8] },
+            quote! { <'a> },
+        ),
+        RegionKind::StructRef {
+            child_writer,
+            child_content,
+            size,
+        } => (
+            quote! {
+                pub fn #region_mut(&mut self) -> #child_writer<'_> {
+                    let off = #region_offset;
+                    #child_writer { data: &mut self.data[off..off + #size] }
+                }
+            },
+            quote! { #lens_name { #region_field: #child_writer::SIZE } },
+            quote! {
+                #child_writer::write_into(
+                    &mut w.data[#region_offset..#region_offset + #size],
+                    &content.#region_field,
+                )?;
+            },
+            quote! { pub #region_field: #child_content },
+            quote! {},
+        ),
+    };
+
     quote! {
         #[derive(Clone, Copy)]
         pub struct #lens_name {
@@ -1857,7 +2307,7 @@ fn emit_forward(name: &str, layout: &ForwardLayout) -> TokenStream {
 
         impl<'a> #writer_name<'a> {
             pub fn encoded_len(lens: &#lens_name) -> usize {
-                #region_offset + lens.#region_field + #trailer_prefix_size
+                #encoded_len_body
             }
 
             pub fn new(data: &'a mut [u8], lens: #lens_name) -> ::binparse::WriteResult<Self> {
@@ -1884,35 +2334,31 @@ fn emit_forward(name: &str, layout: &ForwardLayout) -> TokenStream {
 
             #(#prefix_setters)*
 
-            pub fn #region_mut(&mut self) -> &mut [u8] {
-                let off = #region_offset;
-                &mut self.data[off..off + self.lens.#region_field]
-            }
+            #region_accessor
 
             #(#trailer_setters)*
 
             pub fn write_into(data: &'a mut [u8], content: &#content_name) -> ::binparse::WriteResult<usize> {
-                let lens = #lens_name { #region_field: content.#region_field.len() };
+                let lens = #region_lens_init;
                 let need = Self::encoded_len(&lens);
                 let mut w = Self::new(data, lens)?;
                 #(#prefix_write_calls)*
-                w.#region_mut().copy_from_slice(content.#region_field);
-                let trailer_base = #region_offset + w.lens.#region_field;
-                #(#trailer_write_calls)*
+                #region_write_call
+                #trailer_write_block
                 Ok(need)
             }
 
             pub fn to_vec(content: &#content_name) -> ::std::vec::Vec<u8> {
-                let lens = #lens_name { #region_field: content.#region_field.len() };
+                let lens = #region_lens_init;
                 let mut buf = ::std::vec![0u8; Self::encoded_len(&lens)];
                 let _ = #writer_name::write_into(&mut buf, content);
                 buf
             }
         }
 
-        pub struct #content_name<'a> {
+        pub struct #content_name #content_lifetime {
             #(#prefix_content_fields,)*
-            pub #region_field: &'a [u8],
+            #region_content_field,
             #(#trailer_content_fields,)*
         }
     }

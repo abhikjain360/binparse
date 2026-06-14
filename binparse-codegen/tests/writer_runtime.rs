@@ -943,3 +943,200 @@ struct Frame {
     "#;
     run_round_trip("affine-len-plus-const", dsl, test_body);
 }
+
+#[test]
+fn generated_writer_len_region_struct_ref_round_trips() {
+    let dsl = r#"
+@endian(big) struct Inner { a: u8, b: u16 }
+@endian(big) struct Tlv { tag: u8, length: u8, @len(length) value: Inner }
+"#;
+    let test_body = r#"
+        let content = TlvContent {
+            tag: 0x42,
+            value: InnerContent { a: 0x11, b: 0x2233 },
+        };
+        let lens = TlvLens { value: InnerWriter::SIZE };
+        // 1 (tag) + 1 (length) + 3 (Inner::SIZE) = 5
+        assert_eq!(TlvWriter::encoded_len(&lens), 5);
+
+        let bytes = TlvWriter::to_vec(&content);
+        // length is DERIVED = Inner encoded_len = 3
+        assert_eq!(bytes, vec![0x42, 0x03, 0x11, 0x22, 0x33]);
+
+        let (tlv, rem) = Tlv::parse(&bytes).unwrap();
+        assert!(rem.is_empty());
+        assert_eq!(tlv.tag(), 0x42);
+        // derived length field == inner encoded_len
+        assert_eq!(tlv.length() as usize, InnerWriter::SIZE);
+        let inner = tlv.value().unwrap();
+        assert_eq!(inner.a(), 0x11);
+        assert_eq!(inner.b(), 0x2233);
+
+        // Mode 1: the region accessor returns the child writer, derived length still set.
+        let lens = TlvLens { value: InnerWriter::SIZE };
+        let mut buf = vec![0u8; TlvWriter::encoded_len(&lens)];
+        let mut w = TlvWriter::new(&mut buf, lens).unwrap();
+        w.set_tag(0x99);
+        {
+            let mut inner = w.value_mut();
+            inner.set_a(0x44);
+            inner.set_b(0x5566);
+        }
+        let (tlv, _) = Tlv::parse(&buf).unwrap();
+        assert_eq!(tlv.tag(), 0x99);
+        assert_eq!(tlv.length() as usize, InnerWriter::SIZE);
+        let inner = tlv.value().unwrap();
+        assert_eq!(inner.a(), 0x44);
+        assert_eq!(inner.b(), 0x5566);
+
+        assert!(matches!(
+            TlvWriter::new(&mut [0u8; 2], TlvLens { value: InnerWriter::SIZE }),
+            Err(binparse::WriteError::NotEnoughSpace { .. })
+        ));
+    "#;
+    run_round_trip("len-region-struct-ref", dsl, test_body);
+}
+
+#[test]
+fn generated_writer_len_region_struct_ref_affine_round_trips() {
+    // @len(length - 2): the region occupies (length - 2) bytes, so the derived
+    // length = encoded_len + 2.
+    let dsl = r#"
+@endian(big) struct Inner { a: u8, b: u16 }
+@endian(big) struct Tlv { tag: u8, length: u8, @len(length - 2) value: Inner }
+"#;
+    let test_body = r#"
+        let content = TlvContent {
+            tag: 0x42,
+            value: InnerContent { a: 0x11, b: 0x2233 },
+        };
+        let bytes = TlvWriter::to_vec(&content);
+        // length is DERIVED: Inner encoded_len (3) + 2 = 5
+        assert_eq!(bytes, vec![0x42, 0x05, 0x11, 0x22, 0x33]);
+
+        let (tlv, rem) = Tlv::parse(&bytes).unwrap();
+        assert!(rem.is_empty());
+        assert_eq!(tlv.length() as usize, InnerWriter::SIZE + 2);
+        let inner = tlv.value().unwrap();
+        assert_eq!(inner.a(), 0x11);
+        assert_eq!(inner.b(), 0x2233);
+    "#;
+    run_round_trip("len-region-struct-ref-affine", dsl, test_body);
+}
+
+#[test]
+fn generated_writer_len_region_struct_ref_with_trailer_round_trips() {
+    let dsl = r#"
+@endian(big) struct Inner { a: u8, b: u16 }
+@endian(big) struct Tlv { tag: u8, length: u8, @len(length) value: Inner, crc: u16 }
+"#;
+    let test_body = r#"
+        let content = TlvContent {
+            tag: 0x42,
+            value: InnerContent { a: 0x11, b: 0x2233 },
+            crc: 0xBEEF,
+        };
+        let lens = TlvLens { value: InnerWriter::SIZE };
+        // 1 + 1 + 3 + 2 = 7
+        assert_eq!(TlvWriter::encoded_len(&lens), 7);
+
+        let bytes = TlvWriter::to_vec(&content);
+        assert_eq!(bytes, vec![0x42, 0x03, 0x11, 0x22, 0x33, 0xBE, 0xEF]);
+
+        let (tlv, rem) = Tlv::parse(&bytes).unwrap();
+        assert!(rem.is_empty());
+        assert_eq!(tlv.length() as usize, InnerWriter::SIZE);
+        let inner = tlv.value().unwrap();
+        assert_eq!(inner.a(), 0x11);
+        assert_eq!(inner.b(), 0x2233);
+        // trailer sits AFTER the bounded region.
+        assert_eq!(tlv.crc(), 0xBEEF);
+    "#;
+    run_round_trip("len-region-struct-ref-trailer", dsl, test_body);
+}
+
+#[test]
+fn generated_writer_len_region_union_round_trips() {
+    let dsl = r#"
+@endian(big) struct Packet {
+    kind: u8,
+    length: u8,
+    @len(length) body: union(kind) {
+        1 => Connect { keep_alive: u16 },
+        2 => Connack { ack: u8, code: u8 },
+        _ => Unknown { },
+    },
+}
+"#;
+    let test_body = r#"
+        // Connect: 2-byte body, derived length == 2.
+        let content = PacketContent {
+            body: PacketBodyContent::Connect(ConnectContent { keep_alive: 0x1234 }),
+        };
+        assert_eq!(PacketWriter::encoded_len(&content), 4);
+        let bytes = PacketWriter::to_vec(&content);
+        // kind (derived) = 1, length (derived) = 2, then body.
+        assert_eq!(bytes, vec![0x01, 0x02, 0x12, 0x34]);
+        let (packet, rem) = Packet::parse(&bytes).unwrap();
+        assert!(rem.is_empty());
+        assert_eq!(packet.kind(), 1);
+        assert_eq!(packet.length(), 2);
+        match packet.body().unwrap() {
+            Packet_body::Connect(c) => assert_eq!(c.keep_alive(), 0x1234),
+            _ => panic!("expected Connect"),
+        }
+
+        // Connack: 2-byte body too, but a different discriminator.
+        let content = PacketContent {
+            body: PacketBodyContent::Connack(ConnackContent { ack: 0xAB, code: 0xCD }),
+        };
+        let bytes = PacketWriter::to_vec(&content);
+        assert_eq!(bytes, vec![0x02, 0x02, 0xAB, 0xCD]);
+        let (packet, _) = Packet::parse(&bytes).unwrap();
+        assert_eq!(packet.kind(), 2);
+        // derived length == inner encoded_len
+        assert_eq!(packet.length(), 2);
+        match packet.body().unwrap() {
+            Packet_body::Connack(c) => {
+                assert_eq!(c.ack(), 0xAB);
+                assert_eq!(c.code(), 0xCD);
+            }
+            _ => panic!("expected Connack"),
+        }
+
+        assert!(matches!(
+            PacketWriter::write_into(
+                &mut [0u8; 2],
+                &PacketContent {
+                    body: PacketBodyContent::Connect(ConnectContent { keep_alive: 1 }),
+                },
+            ),
+            Err(binparse::WriteError::NotEnoughSpace { .. })
+        ));
+    "#;
+    run_round_trip("len-region-union", dsl, test_body);
+}
+
+#[test]
+fn generated_writer_len_region_value_too_large_errors() {
+    // @len(length + 1): derived length = encoded_len - 1, into a u8 field. With a
+    // large fixed child, the derived value can exceed u8::MAX.
+    let dsl = r#"
+@endian(big) struct Inner { data: [u8; 300] }
+@endian(big) struct Tlv { tag: u8, length: u8, @len(length) value: Inner }
+"#;
+    let test_body = r#"
+        // Inner::SIZE == 300 > u8::MAX, so the derived length field overflows.
+        assert!(matches!(
+            TlvWriter::new(&mut [0u8; 400], TlvLens { value: InnerWriter::SIZE }),
+            Err(binparse::WriteError::ValueTooLarge { .. })
+        ));
+        let content = TlvContent { tag: 0x01, value: InnerContent { data: [0u8; 300] } };
+        let mut buf = vec![0u8; TlvWriter::encoded_len(&TlvLens { value: InnerWriter::SIZE })];
+        assert!(matches!(
+            TlvWriter::write_into(&mut buf, &content),
+            Err(binparse::WriteError::ValueTooLarge { .. })
+        ));
+    "#;
+    run_round_trip("len-region-value-too-large", dsl, test_body);
+}
