@@ -131,6 +131,12 @@ enum VariantSegment {
         region_field: syn::Ident,
         derived_len: Option<DerivedLen>,
     },
+    VarintLenRegion {
+        region_field: syn::Ident,
+        encode_fn: TokenStream,
+        width_fn: TokenStream,
+        return_ty: TokenStream,
+    },
 }
 
 struct DerivedLen {
@@ -1300,6 +1306,7 @@ fn classify_variant_layout(
     let mut segments: Vec<VariantSegment> = Vec::new();
     let mut cur_run: Vec<WriterField> = Vec::new();
     let mut cur_run_bits = 0usize;
+    let mut pending_varint: Option<(String, TokenStream, TokenStream, TokenStream)> = None;
 
     for (index, item) in inline.items.iter().enumerate() {
         let ast::StructItem::Field(field) = item else {
@@ -1326,6 +1333,25 @@ fn classify_variant_layout(
                     if !cur_run_bits.is_multiple_of(8) {
                         return None;
                     }
+                    if let Some((pv_name, encode_fn, width_fn, return_ty)) = pending_varint.take() {
+                        if pv_name != len_field_str || !matches!(len_adjust, LenAdjust::None) {
+                            return None;
+                        }
+                        if !cur_run.is_empty() {
+                            segments.push(VariantSegment::FixedRun {
+                                fields: std::mem::take(&mut cur_run),
+                                bytes: cur_run_bits / 8,
+                            });
+                            cur_run_bits = 0;
+                        }
+                        segments.push(VariantSegment::VarintLenRegion {
+                            region_field: format_ident!("{}", field.name),
+                            encode_fn,
+                            width_fn,
+                            return_ty,
+                        });
+                        continue;
+                    }
                     let run_index = segments.len();
                     let run_fields = std::mem::take(&mut cur_run);
                     let run_bytes = cur_run_bits / 8;
@@ -1350,6 +1376,23 @@ fn classify_variant_layout(
                     });
                     continue;
                 }
+            } else if field_attrs.hook.is_some() {
+                let Some((encode_fn, width_fn)) = parse_write_hook(&field.attributes) else {
+                    return None;
+                };
+                let Some(hook) = &field_attrs.hook else {
+                    return None;
+                };
+                if pending_varint.is_some() {
+                    return None;
+                }
+                pending_varint = Some((
+                    field.name.to_string(),
+                    encode_fn,
+                    width_fn,
+                    hook.return_ty.clone(),
+                ));
+                continue;
             } else if index == last_index
                 && field_attrs.greedy
                 && field_attrs.until.is_none()
@@ -1380,6 +1423,9 @@ fn classify_variant_layout(
         cur_run_bits += width;
     }
 
+    if pending_varint.is_some() {
+        return None;
+    }
     if !cur_run_bits.is_multiple_of(8) {
         return None;
     }
@@ -1390,10 +1436,12 @@ fn classify_variant_layout(
         });
     }
 
-    if !segments
-        .iter()
-        .any(|s| matches!(s, VariantSegment::DynRegion { .. }))
-    {
+    if !segments.iter().any(|s| {
+        matches!(
+            s,
+            VariantSegment::DynRegion { .. } | VariantSegment::VarintLenRegion { .. }
+        )
+    }) {
         return None;
     }
 
@@ -2422,6 +2470,7 @@ fn emit_variant_writer(name: &str, layout: &VariantLayout) -> TokenStream {
         .iter()
         .filter_map(|s| match s {
             VariantSegment::DynRegion { region_field, .. } => Some(region_field),
+            VariantSegment::VarintLenRegion { region_field, .. } => Some(region_field),
             VariantSegment::FixedRun { .. } => None,
         })
         .collect();
@@ -2473,6 +2522,13 @@ fn emit_variant_writer(name: &str, layout: &VariantLayout) -> TokenStream {
                     let local = format_ident!("r{}", *ri);
                     *ri += 1;
                     quote! { #local }
+                }
+                VariantSegment::VarintLenRegion {
+                    width_fn, return_ty, ..
+                } => {
+                    let local = format_ident!("r{}", *ri);
+                    *ri += 1;
+                    quote! { #width_fn(#local as #return_ty) + #local }
                 }
             })
         })
@@ -2590,6 +2646,22 @@ fn emit_variant_writer(name: &str, layout: &VariantLayout) -> TokenStream {
                 ri += 1;
                 run_index += 1;
             }
+            VariantSegment::VarintLenRegion {
+                region_field,
+                encode_fn,
+                return_ty,
+                ..
+            } => {
+                let local = format_ident!("r{}", ri);
+                write_body.extend(quote! {
+                    let __w = #encode_fn(#local as #return_ty, &mut data[base..])?;
+                    base += __w;
+                    data[base..base + #local].copy_from_slice(content.#region_field);
+                    base += #local;
+                });
+                ri += 1;
+                run_index += 1;
+            }
         }
     }
 
@@ -2607,6 +2679,9 @@ fn emit_variant_writer(name: &str, layout: &VariantLayout) -> TokenStream {
             })
             .collect::<Vec<_>>(),
         VariantSegment::DynRegion { region_field, .. } => {
+            vec![quote! { pub #region_field: &'a [u8] }]
+        }
+        VariantSegment::VarintLenRegion { region_field, .. } => {
             vec![quote! { pub #region_field: &'a [u8] }]
         }
     });

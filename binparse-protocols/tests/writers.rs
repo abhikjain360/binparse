@@ -371,6 +371,45 @@ fn mqtt_v3_pingreq_round_trips_empty_variant_zero_varint() {
     assert!(matches!(mqtt.body().unwrap(), MqttPacket_body::PingReq(_)));
 }
 
+#[cfg(feature = "mqtt_v5")]
+#[test]
+fn mqtt_v5_connack_round_trips_varint_property_region() {
+    use binparse_protocols::mqtt_v5::{
+        ConnackContent, MqttPacket, MqttPacketBodyContent, MqttPacketContent, MqttPacketWriter,
+        MqttPacket_body,
+    };
+
+    let content = MqttPacketContent {
+        flags: 0,
+        body: MqttPacketBodyContent::Connack(ConnackContent {
+            ack_flags: 0,
+            reason_code: 0,
+            properties: &[0x21, 0x00, 0x14],
+        }),
+    };
+    let bytes = MqttPacketWriter::to_vec(&content);
+    assert_eq!(bytes, vec![0x20, 0x06, 0x00, 0x00, 0x03, 0x21, 0x00, 0x14]);
+
+    let (mut mqtt, rem) = MqttPacket::parse(&bytes).unwrap();
+    assert!(rem.is_empty());
+    assert_eq!(mqtt.packet_type(), 2);
+    assert_eq!(*mqtt.remaining_length().unwrap(), 6);
+    match mqtt.body().unwrap() {
+        MqttPacket_body::Connack(c) => {
+            assert_eq!(c.ack_flags(), 0);
+            assert_eq!(c.reason_code(), 0);
+            assert_eq!(*c.prop_len().unwrap(), 3);
+            let props = c
+                .properties()
+                .unwrap()
+                .collect::<ParseResult<Vec<_>>>()
+                .unwrap();
+            assert_eq!(props, vec![0x21, 0x00, 0x14]);
+        }
+        _ => panic!("expected Connack"),
+    }
+}
+
 #[cfg(feature = "mqtt_v3")]
 #[test]
 fn mqtt_v3_publish_round_trips_dynamic_variant() {
