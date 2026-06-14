@@ -129,6 +129,13 @@ fn lower_inner(
                         const_value: None,
                     })
                 }
+                DoneFieldType::Hook => {
+                    let getter = format_ident!("{}", field_name);
+                    Ok(LoweredExpr {
+                        tokens: quote! { self.#getter().map(|v| v as usize).unwrap_or(0) },
+                        const_value: None,
+                    })
+                }
                 DoneFieldType::Other => Err(Error::NonNumericField {
                     expr: render(root),
                     field: field_name.to_string(),

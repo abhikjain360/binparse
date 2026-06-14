@@ -925,7 +925,11 @@ fn generate_vla_hook<'a>(
                 ::binparse::Len { byte: #len_tokens, bit: 0 }
             }),
         };
-        field_accum.field_type = DoneFieldType::Other;
+        field_accum.field_type = if hook_return_is_numeric(&hook.return_ty.to_string()) {
+            DoneFieldType::Hook
+        } else {
+            DoneFieldType::Other
+        };
         field_accum.pre_length_checks = quote! {
             self.#raw_fn_name()?;
         };
@@ -1019,7 +1023,11 @@ fn generate_vla_hook<'a>(
             Err(_) => binparse::Len::ZERO,
         }
     });
-    field_accum.field_type = DoneFieldType::Other;
+    field_accum.field_type = if hook_return_is_numeric(&hook.return_ty.to_string()) {
+        DoneFieldType::Hook
+    } else {
+        DoneFieldType::Other
+    };
     field_accum.pre_length_checks = quote! {
         self.#raw_fn_name()?;
     };
@@ -1046,6 +1054,13 @@ fn generate_vla_hook<'a>(
     };
 
     Ok(())
+}
+
+fn hook_return_is_numeric(type_name: &str) -> bool {
+    matches!(
+        type_name,
+        "u8" | "u16" | "u32" | "u64" | "u128" | "i8" | "i16" | "i32" | "i64" | "i128"
+    )
 }
 
 fn hook_value(type_name: &str, value: TokenStream) -> TokenStream {
@@ -1112,7 +1127,11 @@ fn generate_fixed_hook<'a>(
     )?;
 
     field_accum.len = info.len;
-    field_accum.field_type = DoneFieldType::Other;
+    field_accum.field_type = if hook_return_is_numeric(&hook.return_ty.to_string()) {
+        DoneFieldType::Hook
+    } else {
+        DoneFieldType::Other
+    };
 
     let field_name = field_accum.field_name.clone();
     let hook_fn = &hook.fn_path;

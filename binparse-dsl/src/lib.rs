@@ -118,12 +118,6 @@ pub enum UnionMatcher<'a> {
 }
 
 #[derive(Debug, Clone, PartialEq)]
-pub struct UnionVariant<'a> {
-    pub matchers: Vec<UnionMatcher<'a>>,
-    pub body: UnionBody<'a>,
-}
-
-#[derive(Debug, Clone, PartialEq)]
 pub struct NamedInlineStruct<'a> {
     pub name: &'a str,
     pub attributes: Vec<Attribute<'a>>,
@@ -137,6 +131,12 @@ pub enum UnionBody<'a> {
     NamedInline(NamedInlineStruct<'a>),
     // error variant: @error(ERROR_NAME { field: expr, ... })
     Error(&'a str, Vec<(&'a str, Expr<'a>)>),
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct UnionVariant<'a> {
+    pub matchers: Vec<UnionMatcher<'a>>,
+    pub body: UnionBody<'a>,
 }
 
 #[derive(Debug, Clone, PartialEq)]

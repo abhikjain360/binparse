@@ -51,12 +51,8 @@ impl Add for GeneratedLen {
 
     fn add(self, other: Self) -> Self::Output {
         match (self, other) {
-            (GeneratedLen::Dynamic(a), GeneratedLen::Fixed(Len { byte, bit })) => {
-                GeneratedLen::Dynamic(
-                    quote! { ({ #a }) + ::binparse::Len { byte: #byte, bit: #bit } },
-                )
-            }
-            (GeneratedLen::Fixed(Len { byte, bit }), GeneratedLen::Dynamic(a)) => {
+            (GeneratedLen::Dynamic(a), GeneratedLen::Fixed(Len { byte, bit }))
+            | (GeneratedLen::Fixed(Len { byte, bit }), GeneratedLen::Dynamic(a)) => {
                 GeneratedLen::Dynamic(
                     quote! { ::binparse::Len { byte: #byte, bit: #bit } + ({ #a }) },
                 )
@@ -112,7 +108,7 @@ impl<'a> CodeGen<'a> {
         let mut reverse_deps = HashMap::<_, HashSet<_>>::new();
 
         let mut roots = Vec::new();
-        let mut definition_order = Vec::new();
+        let mut definition_order = Vec::with_capacity(ast.len());
         let mut error_enum: Option<&[ast::ErrorVariant<'_>]> = None;
 
         for def in ast {
@@ -153,10 +149,9 @@ impl<'a> CodeGen<'a> {
                 None => unknown.push(struct_),
             }
         }
-        if !unknown.is_empty() {
-            unknown.sort_unstable();
+        if let Some(name) = unknown.into_iter().min() {
             return Err(Error::UnknownStruct {
-                name: unknown[0].to_string(),
+                name: name.to_string(),
             });
         }
 

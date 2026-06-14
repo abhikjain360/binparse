@@ -15,6 +15,7 @@ use crate::{
 pub(crate) enum DoneFieldType {
     Primitive,
     BitField,
+    Hook,
     Other,
 }
 
