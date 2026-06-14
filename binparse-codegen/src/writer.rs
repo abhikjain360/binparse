@@ -131,6 +131,14 @@ struct LenUnionLayout {
     len_adjust: LenAdjust,
 }
 
+struct LenUnionHookLayout {
+    union: UnionLayout,
+    encode_fn: TokenStream,
+    width_fn: TokenStream,
+    return_ty: TokenStream,
+    len_adjust: LenAdjust,
+}
+
 enum RegionKind {
     Bytes,
     StructRef {
@@ -189,6 +197,7 @@ enum Layout {
     Union(UnionLayout),
     Forward(ForwardLayout),
     LenUnion(LenUnionLayout),
+    LenUnionHook(LenUnionHookLayout),
     GreedyStructTail(GreedyStructTail),
     Conditional(ConditionalLayout),
 }
@@ -218,6 +227,7 @@ pub(crate) fn generate(
         Some(Layout::Union(layout)) => (emit_union(ast.name, &layout), None),
         Some(Layout::Forward(layout)) => (emit_forward(ast.name, &layout), None),
         Some(Layout::LenUnion(layout)) => (emit_len_union(ast.name, &layout), None),
+        Some(Layout::LenUnionHook(layout)) => (emit_len_union_hook(ast.name, &layout), None),
         Some(Layout::GreedyStructTail(layout)) => {
             (emit_greedy_struct_tail(ast.name, &layout), None)
         }
@@ -469,19 +479,28 @@ fn classify(
                 continue;
             }
             ast::FieldValue::Type(ast::Type::Union(union)) => {
-                if pending_hook_len.is_some() {
-                    return Ok(None);
-                }
                 if index != last_index {
-                    return Ok(None);
-                }
-                if !field_attrs_supported(&field_attrs) {
                     return Ok(None);
                 }
                 if !bit_offset.is_multiple_of(8) {
                     return Ok(None);
                 }
                 if !fields_all_simple(&fields) {
+                    return Ok(None);
+                }
+                if let Some(pending) = pending_hook_len.as_ref() {
+                    return classify_len_union_hook(
+                        ast.name,
+                        union,
+                        field,
+                        pending,
+                        fields,
+                        bit_offset,
+                        struct_inherited,
+                        writer_sizes,
+                    );
+                }
+                if !field_attrs_supported(&field_attrs) {
                     return Ok(None);
                 }
                 return classify_union(
@@ -1391,6 +1410,7 @@ fn build_union_layout(
     bit_offset: usize,
     struct_inherited: Inherited,
     writer_sizes: &HashMap<&str, usize>,
+    lenient: bool,
 ) -> Option<UnionLayout> {
     let num_args = union.args.len();
     if num_args == 0 {
@@ -1418,6 +1438,7 @@ fn build_union_layout(
                 wildcard_writable,
                 struct_inherited,
                 writer_sizes,
+                lenient,
             )?;
             continue;
         };
@@ -1429,6 +1450,7 @@ fn build_union_layout(
             wildcard_writable,
             struct_inherited,
             writer_sizes,
+            lenient,
         )?;
     }
 
@@ -1537,14 +1559,15 @@ fn push_union_variant(
     wildcard_writable: bool,
     struct_inherited: Inherited,
     writer_sizes: &HashMap<&str, usize>,
+    lenient: bool,
 ) -> Option<()> {
     let is_wildcard = disc_values.is_none();
     let variant_inherited = match ParsedAttrs::parse(&inline.attributes) {
         Ok(attrs) if struct_attrs_supported(&attrs) => attrs.merge_inherited(struct_inherited),
-        _ => return if is_wildcard { Some(()) } else { None },
+        _ => return if is_wildcard || lenient { Some(()) } else { None },
     };
     let Some(fields) = classify_fixed_items(&inline.items, variant_inherited, writer_sizes) else {
-        return if is_wildcard { Some(()) } else { None };
+        return if is_wildcard || lenient { Some(()) } else { None };
     };
     if is_wildcard && (fields.is_empty() || !wildcard_writable) {
         return Some(());
@@ -1573,6 +1596,7 @@ fn classify_union(
         bit_offset,
         struct_inherited,
         writer_sizes,
+        false,
     )
     .map(Layout::Union))
 }
@@ -1630,6 +1654,7 @@ fn classify_len_union(
                 bit_offset,
                 struct_inherited,
                 writer_sizes,
+                false,
             ) else {
                 return Ok(None);
             };
@@ -1806,6 +1831,64 @@ fn classify_dynamic_tail_hook(
         return_ty: hook.return_ty,
     };
     Ok(Some(Layout::DynamicTailHook { fields, tail }))
+}
+
+#[allow(clippy::too_many_arguments)]
+fn classify_len_union_hook(
+    struct_name: &str,
+    union: &ast::Union<'_>,
+    body_field: &ast::Field<'_>,
+    pending: &PendingHookLen<'_>,
+    prefix_fields: Vec<WriterField>,
+    bit_offset: usize,
+    struct_inherited: Inherited,
+    writer_sizes: &HashMap<&str, usize>,
+) -> Result<Option<Layout>, Error> {
+    let Ok(body_attrs) = ParsedAttrs::parse(&body_field.attributes) else {
+        return Ok(None);
+    };
+    let Some(len_expr) = &body_attrs.len else {
+        return Ok(None);
+    };
+    if !len_only_attr_supported(&body_attrs) {
+        return Ok(None);
+    }
+    let Some((len_field_str, len_adjust)) = affine_size_shape(len_expr) else {
+        return Ok(None);
+    };
+    if len_field_str != pending.field.name {
+        return Ok(None);
+    }
+    let Ok(pending_attrs) = ParsedAttrs::parse(&pending.field.attributes) else {
+        return Ok(None);
+    };
+    let Some(hook) = pending_attrs.hook else {
+        return Ok(None);
+    };
+    let Some((encode_fn, width_fn)) = parse_write_hook(&pending.field.attributes) else {
+        return Err(Error::MissingWriteHook {
+            struct_name: struct_name.to_string(),
+            field: pending.field.name.to_string(),
+        });
+    };
+    let Some(union_layout) = build_union_layout(
+        union,
+        body_field.name,
+        prefix_fields,
+        bit_offset,
+        struct_inherited,
+        writer_sizes,
+        true,
+    ) else {
+        return Ok(None);
+    };
+    Ok(Some(Layout::LenUnionHook(LenUnionHookLayout {
+        union: union_layout,
+        encode_fn,
+        width_fn,
+        return_ty: hook.return_ty,
+        len_adjust,
+    })))
 }
 
 fn parse_write_hook(attrs: &[ast::Attribute<'_>]) -> Option<(TokenStream, TokenStream)> {
@@ -3608,6 +3691,192 @@ fn emit_len_union(name: &str, layout: &LenUnionLayout) -> TokenStream {
                 #prefix_size + match &content.#body_field {
                     #(#encoded_len_arms),*
                 }
+            }
+
+            #(#prefix_setters)*
+
+            pub fn write_into(data: &'a mut [u8], content: &#content_name) -> ::binparse::WriteResult<usize> {
+                let need = Self::encoded_len(content);
+                if data.len() < need {
+                    return Err(::binparse::WriteError::NotEnoughSpace {
+                        expected: need,
+                        got: data.len(),
+                    });
+                }
+                let mut w = Self { data };
+                #(#prefix_write_calls)*
+                match &content.#body_field {
+                    #(#write_arms)*
+                }
+                Ok(need)
+            }
+
+            pub fn to_vec(content: &#content_name) -> ::std::vec::Vec<u8> {
+                let mut buf = ::std::vec![0u8; Self::encoded_len(content)];
+                let _ = #writer_name::write_into(&mut buf, content);
+                buf
+            }
+        }
+
+        pub struct #content_name {
+            #(#content_fields,)*
+            pub #body_field: #body_enum,
+        }
+    }
+}
+
+fn emit_len_union_hook(name: &str, layout: &LenUnionHookLayout) -> TokenStream {
+    let union = &layout.union;
+    let writer_name = format_ident!("{}Writer", name);
+    let content_name = format_ident!("{}Content", name);
+    let field_pascal = to_pascal_case(&union.field_name);
+    let body_enum = format_ident!("{}{}Content", name, field_pascal);
+    let body_field = format_ident!("{}", union.field_name);
+
+    let prefix_size = union.prefix_size;
+    let discs = &union.discs;
+    let encode_fn = &layout.encode_fn;
+    let width_fn = &layout.width_fn;
+    let return_ty = &layout.return_ty;
+
+    let mut variant_entities = TokenStream::new();
+    for variant in &union.variants {
+        let (tokens, _) = emit_fixed(&variant.name.to_string(), &variant.fields);
+        variant_entities.extend(tokens);
+    }
+
+    let enum_variants = union
+        .variants
+        .iter()
+        .map(|variant| union_variant_decl(variant, discs));
+
+    let prefix_setters = union
+        .prefix_fields
+        .iter()
+        .filter(|field| {
+            !is_disc_field(discs, &field.name) && !matches!(field.kind, FieldKind::Constant { .. })
+        })
+        .map(|field| match &field.kind {
+            FieldKind::ByteArray { len } => {
+                let accessor_name = format_ident!("{}_mut", field.name);
+                let offset = field.bit_offset / 8;
+                let end = offset + len;
+                quote! {
+                    fn #accessor_name(&mut self) -> &mut [u8] {
+                        &mut self.data[#offset..#end]
+                    }
+                }
+            }
+            FieldKind::StructRef {
+                name: child_writer,
+                size,
+            } => {
+                let accessor_name = format_ident!("{}_mut", field.name);
+                let offset = field.bit_offset / 8;
+                let end = offset + size;
+                quote! {
+                    fn #accessor_name(&mut self) -> #child_writer<'_> {
+                        #child_writer { data: &mut self.data[#offset..#end] }
+                    }
+                }
+            }
+            FieldKind::Primitive { .. } | FieldKind::BitField { .. } => {
+                let setter_name = format_ident!("set_{}", field.name);
+                let ty = field_type(field);
+                let body = setter_body(field);
+                quote! {
+                    fn #setter_name(&mut self, value: #ty) -> &mut Self {
+                        #body
+                        self
+                    }
+                }
+            }
+            FieldKind::MultiByteArray { .. }
+            | FieldKind::Concat { .. }
+            | FieldKind::Constant { .. } => unreachable!(),
+        });
+
+    let prefix_write_calls = union
+        .prefix_fields
+        .iter()
+        .filter(|field| !is_disc_field(discs, &field.name))
+        .map(|field| {
+            let field_name = &field.name;
+            match &field.kind {
+                FieldKind::ByteArray { .. } => {
+                    let accessor_name = format_ident!("{}_mut", field.name);
+                    quote! { w.#accessor_name().copy_from_slice(&content.#field_name); }
+                }
+                FieldKind::StructRef { name: child_writer, size } => {
+                    let offset = field.bit_offset / 8;
+                    let end = offset + size;
+                    quote! { #child_writer::write_into(&mut w.data[#offset..#end], &content.#field_name)?; }
+                }
+                FieldKind::Primitive { .. } | FieldKind::BitField { .. } => {
+                    let setter_name = format_ident!("set_{}", field.name);
+                    quote! { w.#setter_name(content.#field_name); }
+                }
+                FieldKind::MultiByteArray { .. } | FieldKind::Concat { .. } => unreachable!(),
+                FieldKind::Constant { .. } => constant_write_call(field, &quote! { w.data }),
+            }
+        });
+
+    let content_fields = union
+        .prefix_fields
+        .iter()
+        .filter(|field| {
+            !is_disc_field(discs, &field.name) && !matches!(field.kind, FieldKind::Constant { .. })
+        })
+        .map(|field| {
+            let field_name = &field.name;
+            let ty = field_type(field);
+            quote! { pub #field_name: #ty }
+        });
+
+    let encoded_len_arms = union.variants.iter().map(|variant| {
+        let variant_writer = format_ident!("{}Writer", variant.name);
+        let pat = union_variant_size_pat(&body_enum, variant);
+        quote! { #pat => #variant_writer::SIZE }
+    });
+
+    let disc_target = quote! { w.data };
+    let len_value = len_value_expr(&quote! { region_len }, layout.len_adjust);
+
+    let write_arms = union.variants.iter().map(|variant| {
+        let variant_writer = format_ident!("{}Writer", variant.name);
+        let (pat, c, disc_writes) =
+            union_variant_write_pat(&body_enum, variant, discs, &disc_target);
+        quote! {
+            #pat => {
+                #disc_writes
+                let region_len = #variant_writer::SIZE;
+                let len_value = #len_value;
+                let len_width = #encode_fn(len_value as #return_ty, &mut w.data[#prefix_size..])?;
+                let region_off = #prefix_size + len_width;
+                let end = region_off + region_len;
+                #variant_writer::write_into(&mut w.data[region_off..end], #c)?;
+            }
+        }
+    });
+
+    quote! {
+        #variant_entities
+
+        pub enum #body_enum {
+            #(#enum_variants),*
+        }
+
+        pub struct #writer_name<'a> {
+            data: &'a mut [u8],
+        }
+
+        impl<'a> #writer_name<'a> {
+            pub fn encoded_len(content: &#content_name) -> usize {
+                let region_len = match &content.#body_field {
+                    #(#encoded_len_arms),*
+                };
+                let len_value = #len_value;
+                #prefix_size + #width_fn(len_value as #return_ty) + region_len
             }
 
             #(#prefix_setters)*
