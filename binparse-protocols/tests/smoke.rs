@@ -141,8 +141,8 @@ fn dns_parses_with_compression() {
     ];
     let (dns, rem) = Dns::parse(&packet).unwrap();
     assert!(rem.is_empty());
-    assert_eq!(dns.qname().unwrap(), "example.com");
-    assert_eq!(dns.aname().unwrap(), "example.com");
+    assert_eq!(dns.qname().unwrap(), vec![b"example".to_vec(), b"com".to_vec()]);
+    assert_eq!(dns.aname().unwrap(), vec![b"example".to_vec(), b"com".to_vec()]);
 }
 
 #[cfg(feature = "tls")]
