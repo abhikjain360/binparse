@@ -26,11 +26,11 @@ fn main() {
             .unwrap_or_else(|e| panic!("failed to read spec {}: {e}", spec_path.display()));
         let ast = binparse_dsl_parse::parse_str(&dsl)
             .unwrap_or_else(|e| panic!("failed to parse spec {proto}:\n{e}"));
-        let code = binparse_codegen::CodeGen::generate(&ast)
+        let code = binparse_codegen::CodeGen::generate_writers(&ast)
             .unwrap_or_else(|e| panic!("failed to generate code for spec {proto}: {e}"));
 
         generated.push_str(&format!(
-            "pub mod {proto} {{\n#![allow(clippy::all)]\n{code}\n}}\n"
+            "pub mod {proto} {{\n#![allow(clippy::all, unused)]\n{code}\n}}\n"
         ));
     }
 
